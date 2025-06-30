@@ -1,0 +1,9 @@
+{
+  "name": "list-certificates-function",
+  "version": "1.0.0",
+  "description": "Lambda function to list SSL certificates from ACM",
+  "main": "index.js",
+  "dependencies": {
+    "@aws-sdk/client-acm": "^3.0.0"
+  }
+}

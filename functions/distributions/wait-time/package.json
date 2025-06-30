@@ -1,0 +1,6 @@
+{
+  "name": "wait-time",
+  "version": "1.0.0",
+  "description": "Lambda function to calculate wait time for Step Function",
+  "main": "index.js"
+}

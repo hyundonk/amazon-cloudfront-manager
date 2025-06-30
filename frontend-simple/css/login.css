@@ -1,0 +1,183 @@
+.login-body {
+    background-color: #f5f5f5;
+    background-image: linear-gradient(135deg, #232f3e 0%, #0073bb 100%);
+    height: 100vh;
+    margin: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.login-container {
+    width: 100%;
+    max-width: 400px;
+    padding: 20px;
+}
+
+.login-card {
+    background-color: white;
+    border-radius: 8px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+    overflow: hidden;
+}
+
+.login-header {
+    background-color: #232f3e;
+    color: white;
+    padding: 30px 20px;
+    text-align: center;
+}
+
+.login-header i {
+    font-size: 48px;
+    color: #ff9900;
+    margin-bottom: 15px;
+}
+
+.login-header h1 {
+    margin: 0;
+    font-size: 24px;
+    font-weight: 600;
+}
+
+.login-header p {
+    margin: 5px 0 0;
+    opacity: 0.8;
+    font-size: 14px;
+}
+
+.login-form {
+    padding: 30px 20px;
+}
+
+.input-with-icon {
+    position: relative;
+}
+
+.input-with-icon i {
+    position: absolute;
+    left: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: #666;
+}
+
+.input-with-icon input {
+    padding-left: 35px;
+}
+
+.login-form .form-group {
+    margin-bottom: 20px;
+}
+
+.login-form label {
+    display: block;
+    margin-bottom: 8px;
+    font-weight: 500;
+}
+
+.login-form input[type="text"],
+.login-form input[type="password"] {
+    width: 100%;
+    padding: 12px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 14px;
+    transition: border-color 0.3s;
+}
+
+.login-form input[type="text"]:focus,
+.login-form input[type="password"]:focus {
+    border-color: #0073bb;
+    outline: none;
+    box-shadow: 0 0 0 2px rgba(0, 115, 187, 0.2);
+}
+
+.login-btn {
+    width: 100%;
+    padding: 12px;
+    font-size: 16px;
+    margin-top: 10px;
+}
+
+.forgot-password {
+    text-align: center;
+    margin-top: 20px;
+}
+
+.forgot-password a {
+    color: #0073bb;
+    text-decoration: none;
+    font-size: 14px;
+}
+
+.forgot-password a:hover {
+    text-decoration: underline;
+}
+
+.login-footer {
+    background-color: #f9f9f9;
+    border-top: 1px solid #eee;
+    padding: 15px;
+    text-align: center;
+    font-size: 12px;
+    color: #666;
+}
+
+.error-message {
+    background-color: rgba(231, 76, 60, 0.1);
+    color: #e74c3c;
+    padding: 10px;
+    border-radius: 4px;
+    margin-bottom: 20px;
+    font-size: 14px;
+    display: none;
+}
+
+.error-message.active {
+    display: block;
+}
+
+/* New Password Modal Styles */
+#new-password-modal .modal-content {
+    max-width: 450px;
+}
+
+#new-password-modal .modal-body {
+    padding: 25px;
+}
+
+#new-password-modal p {
+    margin-bottom: 20px;
+    color: #555;
+}
+
+#new-password-modal .form-group {
+    margin-bottom: 20px;
+}
+
+#new-password-modal label {
+    display: block;
+    margin-bottom: 8px;
+    font-weight: 500;
+}
+
+#new-password-modal input {
+    width: 100%;
+    padding: 12px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 14px;
+}
+
+#new-password-modal input:focus {
+    border-color: #0073bb;
+    outline: none;
+    box-shadow: 0 0 0 2px rgba(0, 115, 187, 0.2);
+}
+
+#new-password-modal .btn-primary {
+    width: 100%;
+    padding: 12px;
+    font-size: 16px;
+}

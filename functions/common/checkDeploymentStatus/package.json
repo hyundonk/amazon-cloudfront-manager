@@ -1,0 +1,11 @@
+{
+  "name": "check-deployment-status",
+  "version": "1.0.0",
+  "description": "Checks the deployment status of a CloudFront distribution",
+  "main": "index.js",
+  "dependencies": {
+    "@aws-sdk/client-cloudfront": "^3.835.0",
+    "@aws-sdk/client-dynamodb": "^3.835.0",
+    "@aws-sdk/lib-dynamodb": "^3.835.0"
+  }
+}

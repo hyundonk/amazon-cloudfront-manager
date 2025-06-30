@@ -1,0 +1,6 @@
+{
+  "apiUrl": "${API_GATEWAY_URL}",
+  "region": "${AWS_REGION}",
+  "environment": "${ENVIRONMENT}",
+  "buildTime": "${BUILD_TIME}"
+}

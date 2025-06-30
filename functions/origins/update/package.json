@@ -1,0 +1,11 @@
+{
+  "name": "update-origin",
+  "version": "1.0.0",
+  "description": "Lambda function to update an S3 origin for CloudFront distributions",
+  "main": "index.js",
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.839.0",
+    "@aws-sdk/client-s3": "^3.839.0",
+    "@aws-sdk/lib-dynamodb": "^3.839.0"
+  }
+}

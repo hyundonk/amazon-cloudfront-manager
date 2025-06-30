@@ -1,0 +1,748 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CloudFront Manager</title>
+    <link rel="stylesheet" href="css/styles.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    
+    <!-- AWS SDK and Amplify Libraries -->
+    <script src="https://sdk.amazonaws.com/js/aws-sdk-2.1048.0.min.js"></script>
+    <script src="https://unpkg.com/amazon-cognito-identity-js@5.2.10/dist/amazon-cognito-identity.min.js"></script>
+</head>
+<body>
+    <div class="app-container">
+        <!-- Sidebar Navigation -->
+        <nav class="sidebar">
+            <div class="sidebar-header">
+                <i class="fas fa-cloud"></i>
+                <h2>CloudFront Manager</h2>
+            </div>
+            <ul class="sidebar-menu">
+                <li data-page="dashboard"><i class="fas fa-tachometer-alt"></i> Dashboard</li>
+                <li data-page="distributions"><i class="fas fa-sitemap"></i> Distributions</li>
+                <li data-page="origins"><i class="fas fa-database"></i> Origins</li>
+                <li data-page="templates"><i class="fas fa-copy"></i> Templates</li>
+                <li data-page="settings"><i class="fas fa-cog"></i> Settings</li>
+            </ul>
+            <div class="sidebar-footer">
+                <span>Gaming Developer Tools</span>
+            </div>
+        </nav>
+
+        <!-- Main Content Area -->
+        <main class="main-content">
+            <!-- Top Navigation -->
+            <header class="top-nav">
+                <div class="search-bar">
+                    <i class="fas fa-search"></i>
+                    <input type="text" placeholder="Search...">
+                </div>
+                <div class="user-menu">
+                    <span class="notification-icon">
+                        <i class="fas fa-bell"></i>
+                        <span class="badge">3</span>
+                    </span>
+                    <div class="user-profile">
+                        <img src="img/user-avatar.png" alt="User" onerror="this.src='img/default-avatar.png'">
+                        <span>Game Developer</span>
+                        <i class="fas fa-chevron-down"></i>
+                        <div class="user-dropdown">
+                            <ul>
+                                <li id="profile"><i class="fas fa-user"></i> Profile</li>
+                                <li id="signout"><i class="fas fa-sign-out-alt"></i> Sign Out</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            </header>
+
+            <!-- Content Pages -->
+            <div class="content-container">
+                <!-- Dashboard Page -->
+                <div class="page active" id="dashboard-page">
+                    <h1>Dashboard</h1>
+                    <div class="stats-container">
+                        <div class="stat-card">
+                            <div class="stat-icon blue">
+                                <i class="fas fa-sitemap"></i>
+                            </div>
+                            <div class="stat-details">
+                                <h3>Active Distributions</h3>
+                                <p class="stat-number">12</p>
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-icon green">
+                                <i class="fas fa-copy"></i>
+                            </div>
+                            <div class="stat-details">
+                                <h3>Templates</h3>
+                                <p class="stat-number">5</p>
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-icon orange">
+                                <i class="fas fa-clock"></i>
+                            </div>
+                            <div class="stat-details">
+                                <h3>Pending Deployments</h3>
+                                <p class="stat-number">2</p>
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-icon purple">
+                                <i class="fas fa-exclamation-triangle"></i>
+                            </div>
+                            <div class="stat-details">
+                                <h3>Alerts</h3>
+                                <p class="stat-number">0</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="recent-activity">
+                        <div class="section-header">
+                            <h2>Recent Activity</h2>
+                            <button class="btn-secondary">View All</button>
+                        </div>
+                        <div class="activity-list">
+                            <div class="activity-item">
+                                <div class="activity-icon green">
+                                    <i class="fas fa-plus"></i>
+                                </div>
+                                <div class="activity-details">
+                                    <h4>New Distribution Created</h4>
+                                    <p>game-assets.example.com</p>
+                                    <span class="activity-time">2 hours ago</span>
+                                </div>
+                            </div>
+                            <div class="activity-item">
+                                <div class="activity-icon blue">
+                                    <i class="fas fa-edit"></i>
+                                </div>
+                                <div class="activity-details">
+                                    <h4>Distribution Updated</h4>
+                                    <p>cdn.mygame.com</p>
+                                    <span class="activity-time">Yesterday</span>
+                                </div>
+                            </div>
+                            <div class="activity-item">
+                                <div class="activity-icon orange">
+                                    <i class="fas fa-trash"></i>
+                                </div>
+                                <div class="activity-details">
+                                    <h4>Template Deleted</h4>
+                                    <p>Basic Game CDN</p>
+                                    <span class="activity-time">3 days ago</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Distributions Page -->
+                <div class="page" id="distributions-page">
+                    <div class="page-header">
+                        <h1>CloudFront Distributions</h1>
+                        <button class="btn-primary" id="create-distribution-btn">
+                            <i class="fas fa-plus"></i> Create Distribution
+                        </button>
+                    </div>
+
+                    <div class="filter-bar">
+                        <div class="search-input">
+                            <i class="fas fa-search"></i>
+                            <input type="text" placeholder="Search distributions...">
+                        </div>
+                        <div class="filter-options">
+                            <select>
+                                <option>All Status</option>
+                                <option>Deployed</option>
+                                <option>In Progress</option>
+                                <option>Failed</option>
+                            </select>
+                            <select>
+                                <option>All Types</option>
+                                <option>Web</option>
+                                <option>Download</option>
+                                <option>Streaming</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="table-container">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Name</th>
+                                    <th>Domain Name</th>
+                                    <th>Origin</th>
+                                    <th>Status</th>
+                                    <th>Last Modified</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td>game-assets.example.com</td>
+                                    <td>d1a2b3c4.cloudfront.net</td>
+                                    <td>assets-bucket.s3.amazonaws.com</td>
+                                    <td><span class="status-badge success">Deployed</span></td>
+                                    <td>2025-06-24</td>
+                                    <td class="actions-cell">
+                                        <button class="icon-btn"><i class="fas fa-eye"></i></button>
+                                        <button class="icon-btn"><i class="fas fa-edit"></i></button>
+                                        <button class="icon-btn"><i class="fas fa-trash"></i></button>
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td>cdn.mygame.com</td>
+                                    <td>d5e6f7g8.cloudfront.net</td>
+                                    <td>game-content.s3.amazonaws.com</td>
+                                    <td><span class="status-badge success">Deployed</span></td>
+                                    <td>2025-06-23</td>
+                                    <td class="actions-cell">
+                                        <button class="icon-btn"><i class="fas fa-eye"></i></button>
+                                        <button class="icon-btn"><i class="fas fa-edit"></i></button>
+                                        <button class="icon-btn"><i class="fas fa-trash"></i></button>
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td>downloads.gamestudio.com</td>
+                                    <td>d9h0i1j2.cloudfront.net</td>
+                                    <td>downloads-origin.s3.amazonaws.com</td>
+                                    <td><span class="status-badge warning">In Progress</span></td>
+                                    <td>2025-06-25</td>
+                                    <td class="actions-cell">
+                                        <button class="icon-btn"><i class="fas fa-eye"></i></button>
+                                        <button class="icon-btn"><i class="fas fa-edit"></i></button>
+                                        <button class="icon-btn"><i class="fas fa-trash"></i></button>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Origins Page -->
+                <div class="page" id="origins-page">
+                    <div class="page-header">
+                        <h1>S3 Origins</h1>
+                        <button class="btn-primary" id="create-origin-btn">
+                            <i class="fas fa-plus"></i> Create Origin
+                        </button>
+                    </div>
+
+                    <div class="filter-bar">
+                        <div class="search-input">
+                            <i class="fas fa-search"></i>
+                            <input type="text" placeholder="Search origins...">
+                        </div>
+                        <div class="filter-options">
+                            <select>
+                                <option>All Regions</option>
+                                <option>us-east-1</option>
+                                <option>us-west-2</option>
+                                <option>eu-west-1</option>
+                                <option>ap-northeast-1</option>
+                            </select>
+                            <select>
+                                <option>All Types</option>
+                                <option>Website</option>
+                                <option>Standard</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="table-container">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Name</th>
+                                    <th>Bucket Name</th>
+                                    <th>Region</th>
+                                    <th>Website Enabled</th>
+                                    <th>Created At</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <!-- Origins will be loaded here dynamically -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Templates Page -->
+                <div class="page" id="templates-page">
+                    <div class="page-header">
+                        <h1>Distribution Templates</h1>
+                        <button class="btn-primary">
+                            <i class="fas fa-plus"></i> Create Template
+                        </button>
+                    </div>
+
+                    <div class="templates-grid">
+                        <div class="template-card">
+                            <div class="template-header">
+                                <h3>Game Assets CDN</h3>
+                                <span class="template-category">Web</span>
+                            </div>
+                            <p class="template-description">Optimized for game assets with high TTL and compression.</p>
+                            <div class="template-features">
+                                <span class="feature-badge"><i class="fas fa-compress"></i> Compression</span>
+                                <span class="feature-badge"><i class="fas fa-shield-alt"></i> WAF</span>
+                                <span class="feature-badge"><i class="fas fa-tachometer-alt"></i> Performance</span>
+                            </div>
+                            <div class="template-actions">
+                                <button class="btn-secondary">View</button>
+                                <button class="btn-primary">Apply</button>
+                            </div>
+                        </div>
+
+                        <div class="template-card">
+                            <div class="template-header">
+                                <h3>Game Downloads</h3>
+                                <span class="template-category">Download</span>
+                            </div>
+                            <p class="template-description">Configured for large file downloads with regional edge caches.</p>
+                            <div class="template-features">
+                                <span class="feature-badge"><i class="fas fa-download"></i> Large Files</span>
+                                <span class="feature-badge"><i class="fas fa-globe"></i> Global</span>
+                                <span class="feature-badge"><i class="fas fa-shield-alt"></i> Security</span>
+                            </div>
+                            <div class="template-actions">
+                                <button class="btn-secondary">View</button>
+                                <button class="btn-primary">Apply</button>
+                            </div>
+                        </div>
+
+                        <div class="template-card">
+                            <div class="template-header">
+                                <h3>Game Streaming</h3>
+                                <span class="template-category">Streaming</span>
+                            </div>
+                            <p class="template-description">Optimized for video streaming with low latency.</p>
+                            <div class="template-features">
+                                <span class="feature-badge"><i class="fas fa-video"></i> Video</span>
+                                <span class="feature-badge"><i class="fas fa-bolt"></i> Low Latency</span>
+                                <span class="feature-badge"><i class="fas fa-lock"></i> Secure</span>
+                            </div>
+                            <div class="template-actions">
+                                <button class="btn-secondary">View</button>
+                                <button class="btn-primary">Apply</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Settings Page -->
+                <div class="page" id="settings-page">
+                    <h1>Settings</h1>
+                    <div class="settings-container">
+                        <div class="settings-section">
+                            <h2>Account Settings</h2>
+                            <div class="settings-form">
+                                <div class="form-group">
+                                    <label>Email</label>
+                                    <input type="email" value="developer@example.com" disabled>
+                                </div>
+                                <div class="form-group">
+                                    <label>Name</label>
+                                    <input type="text" value="Game Developer">
+                                </div>
+                                <div class="form-group">
+                                    <label>Role</label>
+                                    <input type="text" value="Administrator" disabled>
+                                </div>
+                                <button class="btn-primary">Update Profile</button>
+                            </div>
+                        </div>
+
+                        <div class="settings-section">
+                            <h2>Notification Preferences</h2>
+                            <div class="settings-form">
+                                <div class="form-check">
+                                    <input type="checkbox" id="email-notifications" checked>
+                                    <label for="email-notifications">Email Notifications</label>
+                                </div>
+                                <div class="form-check">
+                                    <input type="checkbox" id="deployment-alerts" checked>
+                                    <label for="deployment-alerts">Deployment Alerts</label>
+                                </div>
+                                <div class="form-check">
+                                    <input type="checkbox" id="security-alerts" checked>
+                                    <label for="security-alerts">Security Alerts</label>
+                                </div>
+                                <div class="form-check">
+                                    <input type="checkbox" id="performance-reports">
+                                    <label for="performance-reports">Weekly Performance Reports</label>
+                                </div>
+                                <button class="btn-primary">Save Preferences</button>
+                            </div>
+                        </div>
+
+                        <div class="settings-section">
+                            <h2>API Keys</h2>
+                            <div class="api-key-container">
+                                <div class="api-key">
+                                    <div class="api-key-info">
+                                        <h4>Production API Key</h4>
+                                        <p>Created: 2025-05-15</p>
+                                    </div>
+                                    <div class="api-key-actions">
+                                        <button class="btn-secondary">View</button>
+                                        <button class="btn-danger">Revoke</button>
+                                    </div>
+                                </div>
+                                <div class="api-key">
+                                    <div class="api-key-info">
+                                        <h4>Development API Key</h4>
+                                        <p>Created: 2025-06-01</p>
+                                    </div>
+                                    <div class="api-key-actions">
+                                        <button class="btn-secondary">View</button>
+                                        <button class="btn-danger">Revoke</button>
+                                    </div>
+                                </div>
+                                <button class="btn-primary">Generate New API Key</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Modal for creating distribution -->
+    <div class="modal" id="create-distribution-modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Create New Distribution</h2>
+                <button class="close-btn">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>Distribution Name</label>
+                    <input type="text" id="distribution-name" placeholder="e.g., game-assets.example.com">
+                </div>
+                <div class="form-group">
+                    <label>Origin Domain Name</label>
+                    <select id="origin-domain">
+                        <option value="">Select an origin...</option>
+                    </select>
+                    <small>Select from available S3 origins or enter custom domain</small>
+                    <div class="custom-origin-toggle">
+                        <input type="checkbox" id="use-custom-origin">
+                        <label for="use-custom-origin">Use custom origin domain</label>
+                    </div>
+                    <input type="text" id="custom-origin-domain" placeholder="e.g., my-bucket.s3.amazonaws.com" style="display: none; margin-top: 10px;">
+                </div>
+                <div class="form-group">
+                    <label>Origin Path</label>
+                    <input type="text" id="origin-path" placeholder="e.g., /assets">
+                </div>
+                <div class="form-group">
+                    <label>Distribution Type</label>
+                    <select id="distribution-type">
+                        <option>Web</option>
+                        <option>Download</option>
+                        <option>Streaming</option>
+                    </select>
+                </div>
+                <div class="form-check">
+                    <input type="checkbox" id="enable-compression" checked>
+                    <label for="enable-compression">Enable Compression</label>
+                </div>
+                
+                <!-- SSL Certificate Section -->
+                <div class="form-section">
+                    <h3>SSL Certificate Configuration</h3>
+                    <div class="form-group">
+                        <label for="dist-certificate-arn">SSL Certificate</label>
+                        <div class="certificate-selector">
+                            <select id="dist-certificate-arn">
+                                <option value="">No SSL Certificate (CloudFront Default)</option>
+                            </select>
+                            <button type="button" class="btn-refresh-certs" id="refresh-dist-certs" title="Refresh certificates">
+                                <i class="fas fa-sync-alt"></i>
+                            </button>
+                        </div>
+                        <small>Certificate must be from US East (N. Virginia) region</small>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="dist-custom-domains">Custom Domain Names</label>
+                        <input type="text" id="dist-custom-domains" placeholder="example.com, www.example.com">
+                        <small>Comma-separated domains covered by certificate</small>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="dist-viewer-protocol">HTTPS Policy</label>
+                        <select id="dist-viewer-protocol">
+                            <option value="allow-all">Allow HTTP and HTTPS</option>
+                            <option value="redirect-to-https" selected>Redirect HTTP to HTTPS</option>
+                            <option value="https-only">HTTPS Only</option>
+                        </select>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="dist-min-tls-version">Minimum TLS Version</label>
+                        <select id="dist-min-tls-version">
+                            <option value="TLSv1.2_2021" selected>TLS 1.2 (2021)</option>
+                            <option value="TLSv1.2_2019">TLS 1.2 (2019)</option>
+                            <option value="TLSv1.1_2016">TLS 1.1 (Legacy)</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="form-check">
+                    <input type="checkbox" id="enable-https" checked>
+                    <label for="enable-https">Redirect HTTP to HTTPS</label>
+                </div>
+                <div class="form-check">
+                    <input type="checkbox" id="enable-logging">
+                    <label for="enable-logging">Enable Logging</label>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-secondary" id="cancel-distribution-btn">Cancel</button>
+                <button class="btn-primary" id="create-distribution-submit-btn">Create Distribution</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal for creating origin -->
+    <div class="modal" id="create-origin-modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Create New S3 Origin</h2>
+                <button class="close-btn">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>Origin Name</label>
+                    <input type="text" id="origin-name" placeholder="e.g., Main Assets Origin">
+                </div>
+                <div class="form-group">
+                    <label>Bucket Name</label>
+                    <input type="text" id="bucket-name" placeholder="e.g., my-assets-bucket">
+                    <small>Must be globally unique and follow S3 naming rules</small>
+                </div>
+                <div class="form-group">
+                    <label>Region</label>
+                    <select id="bucket-region">
+                        <option value="us-east-1">US East (N. Virginia)</option>
+                        <option value="us-east-2">US East (Ohio)</option>
+                        <option value="us-west-1">US West (N. California)</option>
+                        <option value="us-west-2">US West (Oregon)</option>
+                        <option value="eu-west-1">EU (Ireland)</option>
+                        <option value="eu-central-1">EU (Frankfurt)</option>
+                        <option value="ap-northeast-1">Asia Pacific (Tokyo)</option>
+                        <option value="ap-northeast-2">Asia Pacific (Seoul)</option>
+                        <option value="ap-southeast-1">Asia Pacific (Singapore)</option>
+                        <option value="ap-southeast-2">Asia Pacific (Sydney)</option>
+                    </select>
+                </div>
+                <div class="form-check">
+                    <input type="checkbox" id="enable-website" checked>
+                    <label for="enable-website">Enable Website Hosting</label>
+                </div>
+                <div id="website-config" class="nested-form">
+                    <div class="form-group">
+                        <label>Index Document</label>
+                        <input type="text" id="index-document" value="index.html">
+                    </div>
+                    <div class="form-group">
+                        <label>Error Document</label>
+                        <input type="text" id="error-document" value="error.html">
+                    </div>
+                </div>
+                <div class="form-check">
+                    <input type="checkbox" id="enable-cors">
+                    <label for="enable-cors">Enable CORS</label>
+                </div>
+                <div id="cors-config" class="nested-form hidden">
+                    <div class="form-group">
+                        <label>Allowed Origins</label>
+                        <input type="text" id="cors-origins" value="*">
+                        <small>Use * for all origins or comma-separated list</small>
+                    </div>
+                    <div class="form-group">
+                        <label>Allowed Methods</label>
+                        <div class="checkbox-group">
+                            <label><input type="checkbox" name="cors-methods" value="GET" checked> GET</label>
+                            <label><input type="checkbox" name="cors-methods" value="HEAD" checked> HEAD</label>
+                            <label><input type="checkbox" name="cors-methods" value="PUT"> PUT</label>
+                            <label><input type="checkbox" name="cors-methods" value="POST"> POST</label>
+                            <label><input type="checkbox" name="cors-methods" value="DELETE"> DELETE</label>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-secondary" id="cancel-origin-btn">Cancel</button>
+                <button class="btn-primary" id="create-origin-submit-btn">Create Origin</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal for editing origin -->
+    <div class="modal" id="edit-origin-modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Edit S3 Origin</h2>
+                <button class="close-btn">&times;</button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="edit-origin-id">
+                <div class="form-group">
+                    <label>Origin Name</label>
+                    <input type="text" id="edit-origin-name">
+                </div>
+                <div class="form-group">
+                    <label>Bucket Name</label>
+                    <input type="text" id="edit-bucket-name" disabled>
+                    <small>Bucket name cannot be changed after creation</small>
+                </div>
+                <div class="form-group">
+                    <label>Region</label>
+                    <input type="text" id="edit-bucket-region" disabled>
+                    <small>Region cannot be changed after creation</small>
+                </div>
+                <div class="form-check">
+                    <input type="checkbox" id="edit-enable-website">
+                    <label for="edit-enable-website">Enable Website Hosting</label>
+                </div>
+                <div id="edit-website-config" class="nested-form">
+                    <div class="form-group">
+                        <label>Index Document</label>
+                        <input type="text" id="edit-index-document" value="index.html">
+                    </div>
+                    <div class="form-group">
+                        <label>Error Document</label>
+                        <input type="text" id="edit-error-document" value="error.html">
+                    </div>
+                </div>
+                <div class="form-check">
+                    <input type="checkbox" id="edit-enable-cors">
+                    <label for="edit-enable-cors">Enable CORS</label>
+                </div>
+                <div id="edit-cors-config" class="nested-form hidden">
+                    <div class="form-group">
+                        <label>Allowed Origins</label>
+                        <input type="text" id="edit-cors-origins" value="*">
+                        <small>Use * for all origins or comma-separated list</small>
+                    </div>
+                    <div class="form-group">
+                        <label>Allowed Methods</label>
+                        <div class="checkbox-group">
+                            <label><input type="checkbox" name="edit-cors-methods" value="GET" checked> GET</label>
+                            <label><input type="checkbox" name="edit-cors-methods" value="HEAD" checked> HEAD</label>
+                            <label><input type="checkbox" name="edit-cors-methods" value="PUT"> PUT</label>
+                            <label><input type="checkbox" name="edit-cors-methods" value="POST"> POST</label>
+                            <label><input type="checkbox" name="edit-cors-methods" value="DELETE"> DELETE</label>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-secondary" id="cancel-edit-origin-btn">Cancel</button>
+                <button class="btn-primary" id="update-origin-btn">Update Origin</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal for creating template -->
+    <div class="modal" id="create-template-modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Create New Template</h2>
+                <button class="close-btn">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>Template Name</label>
+                    <input type="text" id="template-name" placeholder="e.g., HTTPS Web Distribution">
+                </div>
+                <div class="form-group">
+                    <label>Description</label>
+                    <textarea id="template-description" placeholder="Describe the purpose of this template"></textarea>
+                </div>
+                <div class="form-group">
+                    <label>Category</label>
+                    <select id="template-category">
+                        <option value="Web">Web</option>
+                        <option value="Download">Download</option>
+                        <option value="Streaming">Streaming</option>
+                        <option value="API">API</option>
+                        <option value="General">General</option>
+                    </select>
+                </div>
+                
+                <!-- SSL Certificate Section -->
+                <div class="form-section">
+                    <h3>SSL Certificate Configuration</h3>
+                    <div class="form-group">
+                        <label for="certificate-arn">SSL Certificate</label>
+                        <div class="certificate-selector">
+                            <select id="certificate-arn">
+                                <option value="">No SSL Certificate (CloudFront Default)</option>
+                            </select>
+                            <button type="button" class="btn-refresh-certs" id="refresh-template-certs" title="Refresh certificates">
+                                <i class="fas fa-sync-alt"></i>
+                            </button>
+                        </div>
+                        <small>Certificate must be from US East (N. Virginia) region</small>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="custom-domains">Custom Domain Names</label>
+                        <input type="text" id="custom-domains" placeholder="example.com, www.example.com">
+                        <small>Comma-separated domains covered by certificate</small>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="viewer-protocol">HTTPS Policy</label>
+                        <select id="viewer-protocol">
+                            <option value="allow-all">Allow HTTP and HTTPS</option>
+                            <option value="redirect-to-https" selected>Redirect HTTP to HTTPS</option>
+                            <option value="https-only">HTTPS Only</option>
+                        </select>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="min-tls-version">Minimum TLS Version</label>
+                        <select id="min-tls-version">
+                            <option value="TLSv1.2_2021" selected>TLS 1.2 (2021)</option>
+                            <option value="TLSv1.2_2019">TLS 1.2 (2019)</option>
+                            <option value="TLSv1.1_2016">TLS 1.1 (Legacy)</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-secondary" id="cancel-template-btn">Cancel</button>
+                <button class="btn-primary" id="create-template-submit-btn">Create Template</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Load configuration before other scripts
+        fetch('./config.json')
+            .then(response => response.json())
+            .then(config => {
+                window.CONFIG = config;
+                console.log('Configuration loaded:', config);
+            })
+            .catch(error => {
+                console.warn('Could not load config.json, using fallback configuration:', error);
+                window.CONFIG = null;
+            });
+    </script>
+    <script src="js/api-fallback.js"></script>
+    <script src="js/main.js"></script>
+</body>
+</html>

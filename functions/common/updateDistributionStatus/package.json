@@ -1,0 +1,10 @@
+{
+  "name": "update-distribution-status",
+  "version": "1.0.0",
+  "description": "Updates the status of a CloudFront distribution in DynamoDB",
+  "main": "index.js",
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.835.0",
+    "@aws-sdk/lib-dynamodb": "^3.835.0"
+  }
+}

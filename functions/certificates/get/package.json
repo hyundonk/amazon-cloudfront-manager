@@ -1,0 +1,9 @@
+{
+  "name": "get-certificate-function",
+  "version": "1.0.0",
+  "description": "Lambda function to get SSL certificate details from ACM",
+  "main": "index.js",
+  "dependencies": {
+    "@aws-sdk/client-acm": "^3.0.0"
+  }
+}
