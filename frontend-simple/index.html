@@ -444,17 +444,10 @@
                     <label>Origin Path</label>
                     <input type="text" id="origin-path" placeholder="e.g., /assets">
                 </div>
-                <div class="form-group">
-                    <label>Distribution Type</label>
-                    <select id="distribution-type">
-                        <option>Web</option>
-                        <option>Download</option>
-                        <option>Streaming</option>
-                    </select>
-                </div>
                 <div class="form-check">
-                    <input type="checkbox" id="enable-compression" checked>
+                    <input type="checkbox" id="enable-compression">
                     <label for="enable-compression">Enable Compression</label>
+                    <small class="form-text text-muted">Note: Compression is disabled by default to match the custom cache policy configuration.</small>
                 </div>
                 
                 <!-- SSL Certificate Section -->

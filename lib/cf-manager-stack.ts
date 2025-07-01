@@ -3,6 +3,7 @@ import { Construct } from 'constructs';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
 import * as iam from 'aws-cdk-lib/aws-iam';
+import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 
 export class CfManagerStack extends cdk.Stack {
   // Expose resources to be used by other stacks
@@ -13,6 +14,7 @@ export class CfManagerStack extends cdk.Stack {
   public readonly historyTable: dynamodb.Table;
   public readonly originsTable: dynamodb.Table;
   public readonly lambdaExecutionRole: iam.Role;
+  public readonly customCachePolicy: cloudfront.CachePolicy;
 
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
@@ -169,6 +171,20 @@ export class CfManagerStack extends cdk.Stack {
     this.historyTable.grantReadWriteData(this.lambdaExecutionRole);
     this.originsTable.grantReadWriteData(this.lambdaExecutionRole);
 
+    // Create custom cache policy for distributions
+    this.customCachePolicy = new cloudfront.CachePolicy(this, 'CachingOptimizedCompressionDisabled', {
+      cachePolicyName: 'CachingOptimized_CompressionDisabled',
+      comment: 'Policy with caching enabled. Does not support Gzip and Brotli compression',
+      defaultTtl: cdk.Duration.days(1),
+      maxTtl: cdk.Duration.days(365),
+      minTtl: cdk.Duration.seconds(0),
+      enableAcceptEncodingGzip: false,
+      enableAcceptEncodingBrotli: false,
+      headerBehavior: cloudfront.CacheHeaderBehavior.none(),
+      queryStringBehavior: cloudfront.CacheQueryStringBehavior.none(),
+      cookieBehavior: cloudfront.CacheCookieBehavior.none()
+    });
+
     // Outputs
     new cdk.CfnOutput(this, 'UserPoolId', { 
       value: this.userPool.userPoolId,
@@ -198,6 +214,11 @@ export class CfManagerStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'OriginsTableName', { 
       value: this.originsTable.tableName,
       description: 'DynamoDB Origins Table Name'
+    });
+    
+    new cdk.CfnOutput(this, 'CustomCachePolicyId', { 
+      value: this.customCachePolicy.cachePolicyId,
+      description: 'Custom Cache Policy ID for CachingOptimized_CompressionDisabled'
     });
   }
 }

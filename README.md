@@ -627,7 +627,7 @@ A template in DynamoDB has the following structure:
           "Items": ["GET", "HEAD"]
         }
       },
-      "CachePolicyId": "658327ea-f89d-4fab-a63d-7e88639e58f6"
+      "CachePolicyId": "CUSTOM_CACHE_POLICY_ID" // CachingOptimized_CompressionDisabled
     },
     "PriceClass": "PriceClass_100",
     "DefaultRootObject": "index.html"
@@ -1128,6 +1128,112 @@ The "Edit Distribution" functionality in the frontend is currently not fully imp
            });
    });
    ```
+
+## Custom Cache Policy Implementation
+
+The CloudFront Manager uses a custom cache policy specifically designed for optimal performance while maintaining compatibility with various content types.
+
+### Cache Policy Configuration
+
+**Policy Name**: `CachingOptimized_CompressionDisabled`
+
+**Key Features**:
+- **Caching Enabled**: Optimized TTL settings for better performance
+- **Compression Disabled**: Both Gzip and Brotli compression are disabled
+- **Flexible Content Support**: Works with all content types without compression conflicts
+
+**Technical Specifications**:
+```json
+{
+  "Name": "CachingOptimized_CompressionDisabled",
+  "Comment": "Policy with caching enabled. Does not support Gzip and Brotli compression",
+  "DefaultTTL": 86400,     // 1 day
+  "MaxTTL": 31536000,      // 1 year
+  "MinTTL": 0,             // No minimum
+  "EnableAcceptEncodingGzip": false,
+  "EnableAcceptEncodingBrotli": false,
+  "HeaderBehavior": "none",
+  "QueryStringBehavior": "none",
+  "CookieBehavior": "none"
+}
+```
+
+### Implementation Details
+
+#### CDK Infrastructure
+The custom cache policy is created in the `CfManagerStack`:
+
+```typescript
+this.customCachePolicy = new cloudfront.CachePolicy(this, 'CachingOptimizedCompressionDisabled', {
+  cachePolicyName: 'CachingOptimized_CompressionDisabled',
+  comment: 'Policy with caching enabled. Does not support Gzip and Brotli compression',
+  defaultTtl: cdk.Duration.days(1),
+  maxTtl: cdk.Duration.days(365),
+  minTtl: cdk.Duration.seconds(0),
+  enableAcceptEncodingGzip: false,
+  enableAcceptEncodingBrotli: false,
+  headerBehavior: cloudfront.CacheHeaderBehavior.none(),
+  queryStringBehavior: cloudfront.CacheQueryStringBehavior.none(),
+  cookieBehavior: cloudfront.CacheCookieBehavior.none()
+});
+```
+
+#### Lambda Function Integration
+Distribution creation automatically uses the custom cache policy:
+
+```javascript
+// Environment variable contains the custom cache policy ID
+CachePolicyId: process.env.CUSTOM_CACHE_POLICY_ID,
+Compress: false // Disabled to match custom cache policy
+```
+
+### Benefits
+
+1. **Consistent Performance**: Standardized caching behavior across all distributions
+2. **Content Compatibility**: Works with pre-compressed content and dynamic content
+3. **Simplified Management**: Automatic application to all new distributions
+4. **Optimal TTL Settings**: Balanced caching strategy for various use cases
+
+### Usage
+
+When creating distributions through the CloudFront Manager:
+
+1. **Standardized Configuration**: All distributions use the same standardized cache policy configuration
+2. **No Distribution Type Selection**: The frontend no longer includes distribution type selection (Web, Download, Streaming) as all distributions use the unified cache policy
+3. **Automatic Application**: All new distributions automatically use the custom cache policy
+4. **HTTP/2 and HTTP/3 Support**: All distributions automatically support both HTTP/2 and HTTP/3 protocols for optimal performance
+5. **No Configuration Required**: The policy is applied transparently
+6. **Consistent Behavior**: All distributions have the same caching characteristics
+
+### Cache Policy Enforcement
+
+The Lambda function implementation ensures that **all distributions use the custom cache policy**, regardless of what configuration is sent from the frontend:
+
+```javascript
+// Always use the custom cache policy from environment variable
+distributionConfig.DefaultCacheBehavior.CachePolicyId = process.env.CUSTOM_CACHE_POLICY_ID || '658327ea-f89d-4fab-a63d-7e88639e58f6';
+
+// Ensure compression is disabled to match custom cache policy
+distributionConfig.DefaultCacheBehavior.Compress = false;
+
+// Always enable HTTP/2 and HTTP/3 support
+distributionConfig.HttpVersion = 'http2and3';
+```
+
+**Key Points**:
+- **Server-side enforcement**: Cache policy decisions are made in the Lambda function, not the frontend
+- **Override behavior**: Any cache policy ID sent from the frontend is automatically overridden
+- **Environment-driven**: The actual cache policy used comes from the `CUSTOM_CACHE_POLICY_ID` environment variable
+- **Consistent application**: All distribution creation requests use the same custom cache policy
+- **HTTP/2 and HTTP/3 support**: All distributions automatically support both HTTP/2 and HTTP/3 protocols
+
+This design ensures that:
+- ✅ **Security**: Frontend cannot override infrastructure-level cache policy decisions
+- ✅ **Consistency**: All distributions use the same optimized cache configuration
+- ✅ **Maintainability**: Cache policy changes only require backend environment variable updates
+- ✅ **Reliability**: No dependency on frontend configuration for critical infrastructure settings
+
+The custom cache policy ensures optimal performance while maintaining compatibility with various content delivery scenarios.
 
 ## To Do List
 

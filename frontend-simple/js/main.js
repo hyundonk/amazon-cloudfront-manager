@@ -1511,7 +1511,6 @@ function createDistributionFromForm() {
         document.getElementById('custom-origin-domain')?.value?.trim() :
         document.getElementById('origin-domain')?.value?.trim();
     const originPath = document.getElementById('origin-path')?.value?.trim() || '';
-    const distributionType = document.getElementById('distribution-type')?.value || 'Web';
     const enableCompression = document.getElementById('enable-compression')?.checked || false;
     
     // SSL configuration
@@ -1580,7 +1579,7 @@ function createDistributionFromForm() {
     
     // Build distribution configuration
     const distributionConfig = {
-        Comment: `${name} - ${distributionType} Distribution`,
+        Comment: `${name} - CloudFront Distribution`,
         Enabled: true,
         Origins: {
             Quantity: 1,
@@ -1639,7 +1638,7 @@ function createDistributionFromForm() {
     
     return {
         name: name,
-        type: distributionType,
+        type: 'Standard',
         config: distributionConfig,
         // Additional metadata
         certificateArn: certificateArn,
@@ -1655,8 +1654,7 @@ function resetDistributionForm() {
     document.getElementById('origin-domain').value = '';
     document.getElementById('custom-origin-domain').value = '';
     document.getElementById('origin-path').value = '';
-    document.getElementById('distribution-type').value = 'Web';
-    document.getElementById('enable-compression').checked = true;
+    document.getElementById('enable-compression').checked = false;
     document.getElementById('use-custom-origin').checked = false;
     
     // Reset SSL fields
@@ -2125,8 +2123,8 @@ const mockData = {
             id: 'tmpl-001',
             name: 'Game Assets CDN',
             category: 'Web',
-            description: 'Optimized for game assets with high TTL and compression.',
-            features: ['Compression', 'WAF', 'Performance']
+            description: 'Optimized for game assets with high TTL and caching.',
+            features: ['Caching', 'WAF', 'Performance']
         },
         {
             id: 'tmpl-002',

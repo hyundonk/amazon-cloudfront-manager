@@ -8,6 +8,7 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import * as sfn from 'aws-cdk-lib/aws-stepfunctions';
 import * as tasks from 'aws-cdk-lib/aws-stepfunctions-tasks';
 import * as logs from 'aws-cdk-lib/aws-logs';
+import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as path from 'path';
 
 interface CfManagerBackendStackProps extends cdk.StackProps {
@@ -16,6 +17,7 @@ interface CfManagerBackendStackProps extends cdk.StackProps {
   templatesTable: dynamodb.Table;
   historyTable: dynamodb.Table;
   originsTable: dynamodb.Table;
+  customCachePolicy: cloudfront.CachePolicy;
 }
 
 export class CfManagerBackendStack extends cdk.Stack {
@@ -59,6 +61,7 @@ export class CfManagerBackendStack extends cdk.Stack {
       TEMPLATES_TABLE: props.templatesTable.tableName,
       HISTORY_TABLE: props.historyTable.tableName,
       ORIGINS_TABLE: props.originsTable.tableName,
+      CUSTOM_CACHE_POLICY_ID: props.customCachePolicy.cachePolicyId,
     };
 
     // Lambda execution role

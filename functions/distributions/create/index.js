@@ -196,9 +196,9 @@ const getDefaultDistributionConfig = (name, originDomain, originPath = '') => {
           Items: ['GET', 'HEAD', 'OPTIONS']
         }
       },
-      CachePolicyId: '658327ea-f89d-4fab-a63d-7e88639e58f6', // CachingOptimized
+      CachePolicyId: process.env.CUSTOM_CACHE_POLICY_ID || '658327ea-f89d-4fab-a63d-7e88639e58f6', // Custom CachingOptimized_CompressionDisabled or fallback
       OriginRequestPolicyId: '88a5eaf4-2fd4-4709-b370-b4c650ea3fcf', // CORS-S3Origin
-      Compress: true
+      Compress: false // Disabled to match custom cache policy
     },
     PriceClass: 'PriceClass_All',
     ViewerCertificate: {
@@ -206,7 +206,7 @@ const getDefaultDistributionConfig = (name, originDomain, originPath = '') => {
       MinimumProtocolVersion: 'TLSv1.2_2021',
       SSLSupportMethod: 'sni-only'
     },
-    HttpVersion: 'http2',
+    HttpVersion: 'http2and3',
     IsIPV6Enabled: true
   };
 };
@@ -252,6 +252,12 @@ exports.handler = async (event) => {
       
       // Ensure DefaultCacheBehavior has all required fields
       if (distributionConfig.DefaultCacheBehavior) {
+        // Always use the custom cache policy from environment variable
+        distributionConfig.DefaultCacheBehavior.CachePolicyId = process.env.CUSTOM_CACHE_POLICY_ID || '658327ea-f89d-4fab-a63d-7e88639e58f6';
+        
+        // Ensure compression is disabled to match custom cache policy
+        distributionConfig.DefaultCacheBehavior.Compress = false;
+        
         // Ensure ForwardedValues is present if CachePolicyId is not provided
         if (!distributionConfig.DefaultCacheBehavior.CachePolicyId && 
             !distributionConfig.DefaultCacheBehavior.ForwardedValues) {
@@ -269,6 +275,9 @@ exports.handler = async (event) => {
           distributionConfig.DefaultCacheBehavior.MinTTL = 0;
         }
       }
+      
+      // Always enable HTTP/2 and HTTP/3 support
+      distributionConfig.HttpVersion = 'http2and3';
       
       // Check if we need to modify the origin configuration for S3 buckets
       if (distributionConfig.Origins && distributionConfig.Origins.Items && distributionConfig.Origins.Items.length > 0) {

@@ -34,7 +34,8 @@ const backendStack = new CfManagerBackendStack(app, 'CfManagerBackendStack', {
   distributionsTable: coreStack.distributionsTable,
   templatesTable: coreStack.templatesTable,
   historyTable: coreStack.historyTable,
-  originsTable: coreStack.originsTable
+  originsTable: coreStack.originsTable,
+  customCachePolicy: coreStack.customCachePolicy
 });
 
 // Status Monitor stack
