@@ -34,7 +34,6 @@ function handleCorsPreflightRequest() {
 // Initialize clients
 const dynamoClient = new DynamoDBClient();
 const docClient = DynamoDBDocumentClient.from(dynamoClient);
-const s3Client = new S3Client();
 const cloudfrontClient = new CloudFrontClient();
 
 exports.handler = async (event) => {
@@ -70,6 +69,9 @@ exports.handler = async (event) => {
     // Create S3 bucket
     const region = body.region || process.env.AWS_REGION || 'us-east-1';
     let oacId = null; // Declare oacId at function scope
+    
+    // Create region-specific S3 client for cross-region bucket creation
+    const s3Client = new S3Client({ region: region });
     
     try {
       const createBucketParams = {

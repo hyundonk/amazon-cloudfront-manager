@@ -57,7 +57,8 @@ cdk.context.json
 
 # Temporary files
 *.tmp
-temp*
+temp/
+temp.*
 debug.log
 conversation.json
 *.conversation.json

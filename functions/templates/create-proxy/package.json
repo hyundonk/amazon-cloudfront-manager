@@ -1,0 +1,9 @@
+{
+  "name": "create-template-proxy-function",
+  "version": "1.0.0",
+  "description": "Proxy Lambda function to handle CORS for creating CloudFront distribution templates",
+  "main": "index.js",
+  "dependencies": {
+    "@aws-sdk/client-lambda": "^3.839.0"
+  }
+}

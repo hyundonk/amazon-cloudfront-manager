@@ -1,7 +1,7 @@
 {
-  "name": "update-distribution-status",
+  "name": "delete-template-function",
   "version": "1.0.0",
-  "description": "Updates the status of a CloudFront distribution in DynamoDB",
+  "description": "Lambda function to delete a CloudFront distribution template",
   "main": "index.js",
   "dependencies": {
     "@aws-sdk/client-dynamodb": "^3.839.0",

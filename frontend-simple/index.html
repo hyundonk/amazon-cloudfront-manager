@@ -729,18 +729,11 @@
         </div>
     </div>
 
+    <script src="js/env.js"></script>
     <script>
-        // Load configuration before other scripts
-        fetch('./config.json')
-            .then(response => response.json())
-            .then(config => {
-                window.CONFIG = config;
-                console.log('Configuration loaded:', config);
-            })
-            .catch(error => {
-                console.warn('Could not load config.json, using fallback configuration:', error);
-                window.CONFIG = null;
-            });
+        // Configuration is now loaded from env.js
+        window.CONFIG = null; // Keep this for compatibility with existing code
+        console.log('Configuration loaded from env.js:', window.ENV);
     </script>
     <script src="js/api-fallback.js"></script>
     <script src="js/main.js"></script>

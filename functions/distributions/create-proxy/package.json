@@ -4,6 +4,6 @@
   "description": "Proxy function for creating CloudFront distributions with proper CORS handling",
   "main": "index.js",
   "dependencies": {
-    "@aws-sdk/client-lambda": "^3.835.0"
+    "@aws-sdk/client-lambda": "^3.839.0"
   }
 }

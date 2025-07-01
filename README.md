@@ -360,6 +360,71 @@ aws acm describe-certificate \
 - AWS CLI configured with appropriate credentials
 - Node.js 18.x or later
 - AWS CDK v2 installed globally (`npm install -g aws-cdk`)
+- API Gateway CloudWatch Logs role configured (see setup instructions below)
+
+### API Gateway CloudWatch Logs Role Setup
+
+API Gateway requires a CloudWatch Logs role to be configured at the account level before it can enable logging. This is a one-time setup per AWS account.
+
+**Step 1: Create the IAM role for API Gateway**
+
+```bash
+# Create the role with trust policy for API Gateway
+aws iam create-role \
+    --role-name APIGatewayCloudWatchLogsRole \
+    --assume-role-policy-document '{
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Effect": "Allow",
+                "Principal": {
+                    "Service": "apigateway.amazonaws.com"
+                },
+                "Action": "sts:AssumeRole"
+            }
+        ]
+    }'
+```
+
+**Step 2: Attach the CloudWatch Logs policy**
+
+```bash
+# Attach the AWS managed policy for CloudWatch Logs
+aws iam attach-role-policy \
+    --role-name APIGatewayCloudWatchLogsRole \
+    --policy-arn arn:aws:iam::aws:policy/service-role/AmazonAPIGatewayPushToCloudWatchLogs
+```
+
+**Step 3: Configure API Gateway account settings**
+
+```bash
+# Get your AWS account ID
+ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+
+# Set the CloudWatch Logs role ARN in API Gateway account settings
+aws apigateway update-account \
+    --patch-operations op=replace,path=/cloudwatchRoleArn,value=arn:aws:iam::${ACCOUNT_ID}:role/APIGatewayCloudWatchLogsRole
+```
+
+**Verification:**
+
+```bash
+# Verify the role is set correctly
+aws apigateway get-account
+```
+
+You should see output similar to:
+```json
+{
+    "cloudwatchRoleArn": "arn:aws:iam::123456789012:role/APIGatewayCloudWatchLogsRole",
+    "throttleSettings": {
+        "burstLimit": 5000,
+        "rateLimit": 10000.0
+    }
+}
+```
+
+**Note**: This setup is required only once per AWS account. If you encounter the error "CloudWatch Logs role ARN must be set in account settings to enable logging" during deployment, it means this prerequisite step was not completed.
 
 ## Deployment
 
@@ -1063,6 +1128,30 @@ The "Edit Distribution" functionality in the frontend is currently not fully imp
            });
    });
    ```
+
+## To Do List
+
+### Frontend Configuration Management
+
+#### Current Method
+The application currently uses **build-time configuration** where the `deploy.sh` script replaces placeholders in `env.js` with actual values from CloudFormation outputs. This approach embeds configuration directly into the frontend build artifacts.
+
+**Limitations:**
+- Configuration is baked into client-side code
+- Requires redeployment for configuration changes
+- Not aligned with AWS Well-Architected Framework best practices
+
+#### Recommended Improvements
+
+**Option 1: Runtime Configuration via API**
+- Add a `/api/config` endpoint that returns configuration values
+- Frontend loads configuration dynamically at runtime
+- Benefits: Better security, no redeployment needed for config changes
+
+**Option 2: AWS Systems Manager Parameter Store**
+- Store configuration parameters in AWS Systems Manager Parameter Store
+- Create API endpoint to retrieve parameters securely
+- Benefits: Centralized config management, version history, fine-grained access control
 
 ## Useful Commands
 

@@ -1,0 +1,11 @@
+{
+  "name": "create-template-function",
+  "version": "1.0.0",
+  "description": "Lambda function to create a CloudFront distribution template",
+  "main": "index.js",
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.839.0",
+    "@aws-sdk/lib-dynamodb": "^3.839.0",
+    "uuid": "^9.0.1"
+  }
+}

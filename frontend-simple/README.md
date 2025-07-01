@@ -79,7 +79,22 @@ The application uses Amazon Cognito for authentication. To set up authentication
 
 To deploy this frontend to your CloudFront Manager S3 bucket and CloudFront distribution, use the provided deployment script:
 
+### Prerequisites
+
+Before running the deployment script, ensure you have:
+1. Deployed the required CloudFormation stacks (`CfManagerStack` and `CfManagerFrontendStack`)
+2. AWS CLI configured with appropriate permissions
+3. The `js/env.js` file exists (copy from `js/env.example.js` if needed)
+
+### Running the Deployment Script
+
 ```bash
+# Navigate to the frontend directory
+cd /path/to/amazon-cloudfront-manager/frontend-simple
+
+# Create the environment configuration file if it doesn't exist
+cp js/env.example.js js/env.js
+
 # Make the script executable if needed
 chmod +x deploy.sh
 
@@ -87,13 +102,25 @@ chmod +x deploy.sh
 ./deploy.sh
 ```
 
-The script will:
-1. Check if the required stacks are deployed
-2. Get the necessary configuration values from CloudFormation outputs
-3. Update the environment configuration file
-4. Deploy the frontend to S3
-5. Create a CloudFront invalidation
+### What the Script Does
+
+The deployment script will:
+1. Check if the required CloudFormation stacks are deployed
+2. Get the necessary configuration values from CloudFormation outputs (User Pool ID, Client ID, API URL)
+3. Update the environment configuration file (`js/env.js`) with actual values
+4. Upload all frontend files to the S3 bucket (excluding deployment scripts and backup files)
+5. Create a CloudFront invalidation to clear the cache
 6. Display the URL where the application is available
+
+### Troubleshooting
+
+If you encounter the error `sed: can't read js/env.js: No such file or directory`:
+```bash
+# Copy the example environment file
+cp js/env.example.js js/env.js
+```
+
+Then run the deployment script again.
 
 ## Manual Deployment
 

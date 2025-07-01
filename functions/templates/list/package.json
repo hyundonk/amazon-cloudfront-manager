@@ -1,7 +1,7 @@
 {
-  "name": "update-distribution-status",
+  "name": "list-templates-function",
   "version": "1.0.0",
-  "description": "Updates the status of a CloudFront distribution in DynamoDB",
+  "description": "Lambda function to list CloudFront distribution templates",
   "main": "index.js",
   "dependencies": {
     "@aws-sdk/client-dynamodb": "^3.839.0",

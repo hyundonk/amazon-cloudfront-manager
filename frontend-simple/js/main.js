@@ -2,12 +2,7 @@
 
 // Function to get API URL dynamically
 function getApiUrl() {
-    // Try to get from window.CONFIG (loaded from config.json)
-    if (window.CONFIG && window.CONFIG.apiUrl) {
-        return window.CONFIG.apiUrl;
-    }
-    
-    // Try to get from window.ENV (legacy support)
+    // Get from window.ENV (loaded from env.js)
     if (window.ENV && window.ENV.API_URL) {
         return window.ENV.API_URL;
     }
@@ -17,12 +12,8 @@ function getApiUrl() {
         return window.API_URL;
     }
     
-    // Fallback: try to detect from current location
-    const currentHost = window.location.hostname;
-    if (currentHost.includes('cloudfront.net')) {
-        // If we're on CloudFront, try relative API path
-        return '/api/';
-    }
+    // No fallback to relative paths - return null
+    return null;
     
     // Last resort: throw error
     throw new Error('API URL not configured. Please check your configuration.');
@@ -883,6 +874,13 @@ function apiCall(endpoint, method = 'GET', data = null) {
     document.body.classList.add('api-loading');
     
     const apiUrl = window.API_URL || getApiUrl();
+    
+    if (!apiUrl) {
+        return Promise.reject({
+            success: false,
+            error: 'API URL not configured'
+        });
+    }
     
     // Make sure endpoint starts with /
     if (!endpoint.startsWith('/')) {

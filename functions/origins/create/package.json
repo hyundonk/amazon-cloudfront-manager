@@ -4,10 +4,10 @@
   "description": "Lambda function to create an S3 origin for CloudFront distributions",
   "main": "index.js",
   "dependencies": {
-    "@aws-sdk/client-cloudfront": "^3.839.0",
-    "@aws-sdk/client-dynamodb": "^3.839.0",
-    "@aws-sdk/client-s3": "^3.839.0",
-    "@aws-sdk/lib-dynamodb": "^3.839.0",
+    "@aws-sdk/client-cloudfront": "^3.840.0",
+    "@aws-sdk/client-dynamodb": "^3.840.0",
+    "@aws-sdk/client-s3": "^3.840.0",
+    "@aws-sdk/lib-dynamodb": "^3.840.0",
     "uuid": "^9.0.0"
   }
 }

@@ -249,7 +249,18 @@ function submitNewPassword() {
     submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Changing Password...';
     
     // Complete the new password challenge
-    cognitoUserGlobal.completeNewPasswordChallenge(newPwd, userAttributesGlobal, {
+    // Filter out email and other non-modifiable attributes
+    const attributesToUpdate = {};
+    if (requiredAttributesGlobal && requiredAttributesGlobal.length > 0) {
+        // Only include required attributes that are not email
+        requiredAttributesGlobal.forEach(attr => {
+            if (attr !== 'email' && userAttributesGlobal[attr]) {
+                attributesToUpdate[attr] = userAttributesGlobal[attr];
+            }
+        });
+    }
+    
+    cognitoUserGlobal.completeNewPasswordChallenge(newPwd, attributesToUpdate, {
         onSuccess: function(result) {
             // Store tokens
             const idToken = result.getIdToken().getJwtToken();
