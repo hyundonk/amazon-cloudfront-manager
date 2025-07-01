@@ -1259,6 +1259,10 @@ The application currently uses **build-time configuration** where the `deploy.sh
 - Create API endpoint to retrieve parameters securely
 - Benefits: Centralized config management, version history, fine-grained access control
 
+## LICENSE
+
+This library is licensed under the MIT-0 License. See the LICENSE file.
+
 ## Useful Commands
 
 * `npm run build`   compile typescript to js

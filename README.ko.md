@@ -412,6 +412,10 @@ distributionConfig.HttpVersion = 'http2and3';
 - 매개변수들을 안전하게 검색하는 API 엔드포인트를 생성합니다
 - 장점: 중앙 집중식 구성 관리, 버전 히스토리, 세밀한 액세스 제어
 
+## 라이선스
+
+이 라이브러리는 MIT-0 라이선스에 따라 라이선스가 부여됩니다. LICENSE 파일을 참조하세요.
+
 ## 유용한 명령어들
 
 * `npm run build`   TypeScript를 JavaScript로 컴파일합니다
