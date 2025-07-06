@@ -1506,18 +1506,10 @@ function setupDistributionModal() {
 // Create distribution data from form
 function createDistributionFromForm() {
     const name = document.getElementById('distribution-name')?.value?.trim();
-    const useCustomOrigin = document.getElementById('use-custom-origin')?.checked;
-    const originDomain = useCustomOrigin ? 
-        document.getElementById('custom-origin-domain')?.value?.trim() :
-        document.getElementById('origin-domain')?.value?.trim();
-    const originPath = document.getElementById('origin-path')?.value?.trim() || '';
-    const enableCompression = document.getElementById('enable-compression')?.checked || false;
     
-    // SSL configuration
-    const certificateArn = document.getElementById('dist-certificate-arn')?.value || '';
-    const customDomains = document.getElementById('dist-custom-domains')?.value || '';
-    const viewerProtocol = document.getElementById('dist-viewer-protocol')?.value || 'allow-all';
-    const minTlsVersion = document.getElementById('dist-min-tls-version')?.value || 'TLSv1.2_2021';
+    // Multi-origin configuration
+    const multiOriginConfig = getMultiOriginConfiguration();
+    const isMultiOrigin = multiOriginConfig !== null;
     
     // Validation
     if (!name) {
@@ -1525,127 +1517,243 @@ function createDistributionFromForm() {
         return null;
     }
     
-    if (!originDomain) {
-        alert('Origin domain is required');
+    // Validate multi-origin configuration if enabled
+    if (isMultiOrigin && !validateMultiOriginConfiguration()) {
         return null;
     }
     
-    // Generate a proper origin ID
-    const originId = useCustomOrigin ? 
-        'custom-origin-' + Date.now() : 
-        'managed-origin-' + Date.now();
+    // SSL configuration
+    const certificateArn = document.getElementById('dist-certificate-arn')?.value || '';
+    const customDomains = document.getElementById('dist-custom-domains')?.value || '';
+    const viewerProtocol = document.getElementById('dist-viewer-protocol')?.value || 'allow-all';
+    const minTlsVersion = document.getElementById('dist-min-tls-version')?.value || 'TLSv1.2_2021';
     
-    console.log('Generated origin ID:', originId);
-    
-    // Get origin details if using managed origin
-    let originConfig = {
-        Id: originId,
-        DomainName: originDomain,
-        OriginPath: originPath.startsWith('/') ? originPath : (originPath ? '/' + originPath : '')
-    };
-    
-    console.log('Initial origin config:', originConfig);
-    
-    if (!useCustomOrigin) {
-        // Using managed S3 origin
-        const originSelect = document.getElementById('origin-domain');
-        const selectedOption = originSelect.options[originSelect.selectedIndex];
+    if (isMultiOrigin) {
+        // Multi-origin distribution
+        const defaultOriginId = multiOriginConfig.defaultOriginId;
+        const allOriginIds = [defaultOriginId, ...multiOriginConfig.additionalOriginIds];
         
-        // Only use the managed origin ID if it exists and is not null/empty
-        const managedOriginId = selectedOption?.getAttribute('data-origin-id');
-        console.log('Managed origin ID from dropdown:', managedOriginId);
+        // Build Origins configuration
+        const origins = allOriginIds.map(originId => {
+            const origin = availableOrigins.find(o => (o.id === originId) || (o.originId === originId));
+            if (!origin) {
+                throw new Error(`Origin not found: ${originId}`);
+            }
+            
+            return {
+                Id: originId,
+                DomainName: origin.bucketName + '.s3.' + origin.region + '.amazonaws.com',
+                OriginPath: '',
+                S3OriginConfig: {
+                    OriginAccessIdentity: ''
+                },
+                ConnectionAttempts: 3,
+                ConnectionTimeout: 10,
+                OriginShield: {
+                    Enabled: false
+                }
+            };
+        });
         
-        if (managedOriginId && managedOriginId !== 'null' && managedOriginId.trim() !== '') {
-            console.log('Using managed origin ID:', managedOriginId);
-            originConfig.Id = managedOriginId;
-        } else {
-            console.log('No valid managed origin ID, keeping generated ID:', originConfig.Id);
-        }
-        // Otherwise keep the generated originId
-        
-        originConfig.S3OriginConfig = {
-            OriginAccessIdentity: ""
+        return {
+            name: name,
+            isMultiOrigin: true,
+            multiOriginConfig: multiOriginConfig,
+            config: {
+                Comment: `${name} - Multi-Origin Distribution`,
+                Enabled: true,
+                CallerReference: `${name}-${Date.now()}`,
+                
+                // Origins configuration
+                Origins: {
+                    Quantity: origins.length,
+                    Items: origins
+                },
+                
+                // Default Cache Behavior
+                DefaultCacheBehavior: {
+                    TargetOriginId: defaultOriginId,
+                    ViewerProtocolPolicy: viewerProtocol,
+                    AllowedMethods: {
+                        Quantity: 2,
+                        Items: ['GET', 'HEAD'],
+                        CachedMethods: {
+                            Quantity: 2,
+                            Items: ['GET', 'HEAD']
+                        }
+                    },
+                    CachePolicyId: window.ENV.CUSTOM_CACHE_POLICY_ID,
+                    Compress: false,
+                    TrustedSigners: {
+                        Enabled: false,
+                        Quantity: 0
+                    },
+                    TrustedKeyGroups: {
+                        Enabled: false,
+                        Quantity: 0
+                    },
+                    FieldLevelEncryptionId: ''
+                },
+                
+                // SSL configuration
+                ViewerCertificate: certificateArn ? {
+                    CloudFrontDefaultCertificate: false,
+                    AcmCertificateArn: certificateArn,
+                    Certificate: certificateArn,
+                    SSLSupportMethod: 'sni-only',
+                    MinimumProtocolVersion: minTlsVersion,
+                    CertificateSource: 'acm'
+                } : {
+                    CloudFrontDefaultCertificate: true,
+                    MinimumProtocolVersion: 'TLSv1.2_2021',
+                    SSLSupportMethod: 'sni-only'
+                },
+                
+                // Aliases for custom domains
+                Aliases: customDomains ? {
+                    Quantity: customDomains.split(',').length,
+                    Items: customDomains.split(',').map(domain => domain.trim())
+                } : {
+                    Quantity: 0,
+                    Items: []
+                },
+                
+                // Other configuration
+                PriceClass: 'PriceClass_100',
+                HttpVersion: 'http2and3',
+                IsIPV6Enabled: true
+            }
         };
     } else {
-        // Using custom origin
-        originConfig.CustomOriginConfig = {
-            HTTPPort: 80,
-            HTTPSPort: 443,
-            OriginProtocolPolicy: "https-only"
-        };
-    }
-    
-    console.log('Final origin config:', originConfig);
-    
-    // Build distribution configuration
-    const distributionConfig = {
-        Comment: `${name} - CloudFront Distribution`,
-        Enabled: true,
-        Origins: {
-            Quantity: 1,
-            Items: [originConfig]
-        },
-        DefaultCacheBehavior: {
-            TargetOriginId: originConfig.Id, // ✅ Use the same ID as the origin
-            ViewerProtocolPolicy: viewerProtocol,
-            AllowedMethods: {
-                Quantity: 2,
-                Items: ["GET", "HEAD"],
-                CachedMethods: {
-                    Quantity: 2,
-                    Items: ["GET", "HEAD"]
-                }
-            },
-            CachePolicyId: "658327ea-f89d-4fab-a63d-7e88639e58f6",
-            Compress: enableCompression
-        },
-        PriceClass: "PriceClass_100"
-    };
-    
-    // Add SSL configuration if provided
-    if (certificateArn && customDomains && certificateArn !== '') {
-        const domains = customDomains.split(',').map(d => d.trim()).filter(d => d);
+        // Single-origin distribution (existing logic)
+        const useCustomOrigin = document.getElementById('use-custom-origin')?.checked;
+        const originDomain = useCustomOrigin ? 
+            document.getElementById('custom-origin-domain')?.value?.trim() :
+            document.getElementById('origin-domain')?.value?.trim();
+        const originPath = document.getElementById('origin-path')?.value?.trim() || '';
+        const enableCompression = document.getElementById('enable-compression')?.checked || false;
         
-        if (domains.length > 0) {
-            distributionConfig.ViewerCertificate = {
-                CloudFrontDefaultCertificate: false,  // Added: Required when using custom certificate
-                AcmCertificateArn: certificateArn,
-                Certificate: certificateArn,           // Added: Required Certificate field
-                SSLSupportMethod: "sni-only",          // Fixed: Capital SSL
-                MinimumProtocolVersion: minTlsVersion,
-                CertificateSource: "acm"
-            };
+        if (!originDomain) {
+            alert('Origin domain is required');
+            return null;
+        }
+        
+        // Generate a proper origin ID
+        const originId = useCustomOrigin ? 
+            'custom-origin-' + Date.now() : 
+            'managed-origin-' + Date.now();
+        
+        console.log('Generated origin ID:', originId);
+        
+        // Get origin details if using managed origin
+        let originConfig = {
+            Id: originId,
+            DomainName: originDomain,
+            OriginPath: originPath.startsWith('/') ? originPath : (originPath ? '/' + originPath : '')
+        };
+        
+        console.log('Initial origin config:', originConfig);
+        
+        if (!useCustomOrigin) {
+            // Using managed S3 origin
+            const originSelect = document.getElementById('origin-domain');
+            const selectedOption = originSelect.options[originSelect.selectedIndex];
             
-            distributionConfig.Aliases = {
-                Quantity: domains.length,
-                Items: domains
+            // Only use the managed origin ID if it exists and is not null/empty
+            const managedOriginId = selectedOption?.getAttribute('data-origin-id');
+            console.log('Managed origin ID from dropdown:', managedOriginId);
+            
+            if (managedOriginId && managedOriginId !== 'null' && managedOriginId.trim() !== '') {
+                console.log('Using managed origin ID:', managedOriginId);
+                originConfig.Id = managedOriginId;
+            } else {
+                console.log('No valid managed origin ID, keeping generated ID:', originConfig.Id);
+            }
+            
+            originConfig.S3OriginConfig = {
+                OriginAccessIdentity: ""
             };
         } else {
-            // No custom domains, use default certificate
+            // Using custom origin
+            originConfig.CustomOriginConfig = {
+                HTTPPort: 80,
+                HTTPSPort: 443,
+                OriginProtocolPolicy: "https-only"
+            };
+        }
+        
+        console.log('Final origin config:', originConfig);
+        
+        // Build distribution configuration
+        const distributionConfig = {
+            Comment: `${name} - CloudFront Distribution`,
+            Enabled: true,
+            Origins: {
+                Quantity: 1,
+                Items: [originConfig]
+            },
+            DefaultCacheBehavior: {
+                TargetOriginId: originConfig.Id, // ✅ Use the same ID as the origin
+                ViewerProtocolPolicy: viewerProtocol,
+                AllowedMethods: {
+                    Quantity: 2,
+                    Items: ["GET", "HEAD"],
+                    CachedMethods: {
+                        Quantity: 2,
+                        Items: ["GET", "HEAD"]
+                    }
+                },
+                CachePolicyId: "658327ea-f89d-4fab-a63d-7e88639e58f6",
+                Compress: enableCompression
+            },
+            PriceClass: "PriceClass_100"
+        };
+        
+        // Add SSL configuration if provided
+        if (certificateArn && customDomains && certificateArn !== '') {
+            const domains = customDomains.split(',').map(d => d.trim()).filter(d => d);
+            
+            if (domains.length > 0) {
+                distributionConfig.ViewerCertificate = {
+                    CloudFrontDefaultCertificate: false,  // Added: Required when using custom certificate
+                    AcmCertificateArn: certificateArn,
+                    Certificate: certificateArn,           // Added: Required Certificate field
+                    SSLSupportMethod: "sni-only",          // Fixed: Capital SSL
+                    MinimumProtocolVersion: minTlsVersion,
+                    CertificateSource: "acm"
+                };
+                
+                distributionConfig.Aliases = {
+                    Quantity: domains.length,
+                    Items: domains
+                };
+            } else {
+                // No custom domains, use default certificate
+                distributionConfig.ViewerCertificate = {
+                    CloudFrontDefaultCertificate: true,
+                    MinimumProtocolVersion: minTlsVersion
+                };
+            }
+        } else {
             distributionConfig.ViewerCertificate = {
                 CloudFrontDefaultCertificate: true,
                 MinimumProtocolVersion: minTlsVersion
             };
         }
-    } else {
-        distributionConfig.ViewerCertificate = {
-            CloudFrontDefaultCertificate: true,
-            MinimumProtocolVersion: minTlsVersion
+        
+        console.log('Generated distribution config:', distributionConfig);
+        
+        return {
+            name: name,
+            type: 'Standard',
+            config: distributionConfig,
+            // Additional metadata
+            certificateArn: certificateArn,
+            customDomains: customDomains,
+            viewerProtocol: viewerProtocol,
+            minTlsVersion: minTlsVersion
         };
     }
-    
-    console.log('Generated distribution config:', distributionConfig);
-    
-    return {
-        name: name,
-        type: 'Standard',
-        config: distributionConfig,
-        // Additional metadata
-        certificateArn: certificateArn,
-        customDomains: customDomains,
-        viewerProtocol: viewerProtocol,
-        minTlsVersion: minTlsVersion
-    };
 }
 
 // Reset distribution form
@@ -1662,6 +1770,17 @@ function resetDistributionForm() {
     document.getElementById('dist-custom-domains').value = '';
     document.getElementById('dist-viewer-protocol').value = 'redirect-to-https';
     document.getElementById('dist-min-tls-version').value = 'TLSv1.2_2021';
+    
+    // Reset multi-origin fields
+    const enableMultiOriginCheckbox = document.getElementById('enable-multi-origin');
+    if (enableMultiOriginCheckbox) {
+        enableMultiOriginCheckbox.checked = false;
+        const multiOriginConfig = document.getElementById('multi-origin-config');
+        if (multiOriginConfig) {
+            multiOriginConfig.style.display = 'none';
+        }
+        resetMultiOriginForm();
+    }
     
     // Reset visibility
     document.getElementById('origin-domain').style.display = 'block';
@@ -2232,4 +2351,581 @@ function setupTemplatesUI() {
             createTemplateModal.classList.remove('active');
         }
     });
+}
+
+// Multi-Origin Configuration Management
+let additionalOriginCounter = 0;
+let availableOrigins = [];
+let regionMappingPresets = {};
+
+/**
+ * Initialize multi-origin functionality
+ */
+function initializeMultiOrigin() {
+    console.log('Initializing multi-origin functionality');
+    
+    // Load available origins
+    loadAvailableOrigins();
+    
+    // Load region mapping presets
+    loadRegionMappingPresets();
+    
+    // Set up event listeners
+    setupMultiOriginEventListeners();
+}
+
+/**
+ * Load available origins from API or existing dropdown
+ */
+async function loadAvailableOrigins() {
+    try {
+        // First try to load from API
+        const response = await apiCall('/origins');
+        if (response.success && response.data && response.data.origins) {
+            availableOrigins = response.data.origins;
+            console.log('Loaded origins from API:', availableOrigins.length);
+            populateOriginSelects();
+            return;
+        }
+    } catch (error) {
+        console.error('Error loading origins from API:', error);
+    }
+    
+    // Fallback: Load from existing origin dropdown
+    const existingOriginSelect = document.getElementById('origin-domain');
+    if (existingOriginSelect && existingOriginSelect.options.length > 1) {
+        availableOrigins = [];
+        
+        // Skip the first option (placeholder)
+        for (let i = 1; i < existingOriginSelect.options.length; i++) {
+            const option = existingOriginSelect.options[i];
+            const originId = option.getAttribute('data-origin-id') || `origin-${i}`;
+            const bucketName = option.value;
+            const displayText = option.textContent;
+            
+            // Extract name from display text (format: "name (bucket)")
+            const nameMatch = displayText.match(/^(.+?)\s*\(/);
+            const name = nameMatch ? nameMatch[1].trim() : bucketName;
+            
+            availableOrigins.push({
+                id: originId,           // Use 'id' instead of 'originId' to match API response
+                originId: originId,     // Keep both for compatibility
+                name: name,
+                bucketName: bucketName,
+                domainName: bucketName
+            });
+        }
+        
+        console.log('Loaded origins from existing dropdown:', availableOrigins);
+        populateOriginSelects();
+    } else {
+        console.warn('No origins available from API or existing dropdown');
+    }
+}
+
+/**
+ * Load region mapping presets (static data for now)
+ */
+function loadRegionMappingPresets() {
+    regionMappingPresets = {
+        'asia-us': {
+            name: 'Asia-Pacific + Americas',
+            description: '2-origin setup: Asia-Pacific regions + Rest of world',
+            requiredOrigins: 2,
+            groups: {
+                'Asia-Pacific': [
+                    'ap-east-1', 'ap-northeast-1', 'ap-northeast-2', 'ap-northeast-3',
+                    'ap-south-1', 'ap-south-2', 'ap-southeast-1', 'ap-southeast-2',
+                    'ap-southeast-3', 'ap-southeast-4', 'ap-southeast-5', 'ap-southeast-7',
+                    'me-central-1'
+                ],
+                'Americas & Europe': [
+                    'us-east-1', 'us-east-2', 'us-west-1', 'us-west-2',
+                    'ca-central-1', 'ca-west-1', 'eu-central-1', 'eu-central-2',
+                    'eu-north-1', 'eu-south-1', 'eu-south-2', 'eu-west-1',
+                    'eu-west-2', 'eu-west-3', 'af-south-1', 'il-central-1',
+                    'me-south-1', 'mx-central-1', 'sa-east-1'
+                ]
+            }
+        },
+        'global-three': {
+            name: 'Global 3-Region',
+            description: '3-origin setup: Asia-Pacific, Americas, Europe+Others',
+            requiredOrigins: 3,
+            groups: {
+                'Asia-Pacific': [
+                    'ap-east-1', 'ap-northeast-1', 'ap-northeast-2', 'ap-northeast-3',
+                    'ap-south-1', 'ap-south-2', 'ap-southeast-1', 'ap-southeast-2',
+                    'ap-southeast-3', 'ap-southeast-4', 'ap-southeast-5', 'ap-southeast-7',
+                    'me-central-1'
+                ],
+                'Americas': [
+                    'us-east-1', 'us-east-2', 'us-west-1', 'us-west-2',
+                    'ca-central-1', 'ca-west-1', 'mx-central-1', 'sa-east-1'
+                ],
+                'Europe & Others': [
+                    'eu-central-1', 'eu-central-2', 'eu-north-1', 'eu-south-1',
+                    'eu-south-2', 'eu-west-1', 'eu-west-2', 'eu-west-3',
+                    'af-south-1', 'il-central-1', 'me-south-1'
+                ]
+            }
+        }
+    };
+}
+
+/**
+ * Set up event listeners for multi-origin functionality
+ */
+function setupMultiOriginEventListeners() {
+    // Multi-origin toggle
+    const enableMultiOriginCheckbox = document.getElementById('enable-multi-origin');
+    if (enableMultiOriginCheckbox) {
+        enableMultiOriginCheckbox.addEventListener('change', function() {
+            const multiOriginConfig = document.getElementById('multi-origin-config');
+            const isEnabled = this.checked;
+            
+            multiOriginConfig.style.display = isEnabled ? 'block' : 'none';
+            
+            if (isEnabled) {
+                // Reset form when enabling
+                resetMultiOriginForm();
+            } else {
+                // Clear validation when disabling
+                clearMultiOriginValidation();
+            }
+        });
+    }
+    
+    // Add additional origin button
+    const addAdditionalOriginBtn = document.getElementById('add-additional-origin');
+    if (addAdditionalOriginBtn) {
+        addAdditionalOriginBtn.addEventListener('click', addAdditionalOrigin);
+    }
+    
+    // Region mapping preset change
+    const regionMappingPresetSelect = document.getElementById('region-mapping-preset');
+    if (regionMappingPresetSelect) {
+        regionMappingPresetSelect.addEventListener('change', function() {
+            updateMappingPreview();
+            validateMultiOriginConfiguration();
+        });
+    }
+    
+    // Default origin change
+    const defaultOriginSelect = document.getElementById('default-origin');
+    if (defaultOriginSelect) {
+        defaultOriginSelect.addEventListener('change', function() {
+            updateMappingPreview();
+            validateMultiOriginConfiguration();
+        });
+    }
+}
+
+/**
+ * Populate origin select dropdowns
+ */
+function populateOriginSelects() {
+    const defaultOriginSelect = document.getElementById('default-origin');
+    if (!defaultOriginSelect) return;
+    
+    // Clear existing options (except the first placeholder)
+    defaultOriginSelect.innerHTML = '<option value="">Select default origin...</option>';
+    
+    // Add origins to select
+    availableOrigins.forEach(origin => {
+        const option = document.createElement('option');
+        option.value = origin.id || origin.originId; // Use 'id' first, fallback to 'originId'
+        option.textContent = `${origin.name} (${origin.bucketName})`;
+        defaultOriginSelect.appendChild(option);
+    });
+}
+
+/**
+ * Add additional origin selection
+ */
+function addAdditionalOrigin() {
+    additionalOriginCounter++;
+    const container = document.getElementById('additional-origins-list');
+    if (!container) return;
+    
+    const originItem = document.createElement('div');
+    originItem.className = 'additional-origin-item';
+    originItem.id = `additional-origin-${additionalOriginCounter}`;
+    
+    originItem.innerHTML = `
+        <select class="additional-origin-select" data-counter="${additionalOriginCounter}">
+            <option value="">Select additional origin...</option>
+            ${availableOrigins.map(origin => 
+                `<option value="${origin.id || origin.originId}">${origin.name} (${origin.bucketName})</option>`
+            ).join('')}
+        </select>
+        <button type="button" class="remove-origin-btn" onclick="removeAdditionalOrigin(${additionalOriginCounter})">
+            <i class="fas fa-times"></i> Remove
+        </button>
+    `;
+    
+    container.appendChild(originItem);
+    
+    // Add event listener for this select
+    const select = originItem.querySelector('.additional-origin-select');
+    select.addEventListener('change', function() {
+        updateMappingPreview();
+        validateMultiOriginConfiguration();
+    });
+    
+    // Update mapping preview
+    updateMappingPreview();
+    validateMultiOriginConfiguration();
+}
+
+/**
+ * Remove additional origin selection
+ */
+function removeAdditionalOrigin(counter) {
+    const originItem = document.getElementById(`additional-origin-${counter}`);
+    if (originItem) {
+        originItem.remove();
+        updateMappingPreview();
+        validateMultiOriginConfiguration();
+    }
+}
+
+/**
+ * Update mapping preview based on current selections
+ */
+function updateMappingPreview() {
+    const presetSelect = document.getElementById('region-mapping-preset');
+    const defaultOriginSelect = document.getElementById('default-origin');
+    const additionalOriginSelects = document.querySelectorAll('.additional-origin-select');
+    
+    if (!presetSelect || !defaultOriginSelect) return;
+    
+    const preset = presetSelect.value;
+    const defaultOriginId = defaultOriginSelect.value;
+    
+    console.log('=== DEBUG: updateMappingPreview ===');
+    console.log('Preset:', preset);
+    console.log('Default Origin ID:', defaultOriginId);
+    console.log('Available Origins:', availableOrigins);
+    
+    const previewContainer = document.getElementById('mapping-preview');
+    if (!previewContainer) return;
+    
+    if (!preset || !defaultOriginId) {
+        previewContainer.style.display = 'none';
+        return;
+    }
+    
+    const presetConfig = regionMappingPresets[preset];
+    if (!presetConfig) {
+        previewContainer.style.display = 'none';
+        return;
+    }
+    
+    // Get selected origins
+    const selectedOrigins = [defaultOriginId];
+    additionalOriginSelects.forEach(select => {
+        if (select.value) {
+            selectedOrigins.push(select.value);
+        }
+    });
+    
+    console.log('Selected Origins:', selectedOrigins);
+    
+    // Show/hide Europe group for global-three preset
+    const europeGroup = document.getElementById('europe-group');
+    if (europeGroup) {
+        europeGroup.style.display = preset === 'global-three' ? 'block' : 'none';
+    }
+    
+    // Update origin assignments
+    const groupNames = Object.keys(presetConfig.groups);
+    groupNames.forEach((groupName, index) => {
+        let originId;
+        let originName = 'Not assigned';
+        
+        // For Asia-Pacific + Americas preset
+        if (preset === 'asia-us') {
+            if (groupName.includes('Asia')) {
+                // Use first additional origin for Asia-Pacific, fallback to default
+                originId = selectedOrigins[1] || selectedOrigins[0]; // First additional or default
+            } else if (groupName.includes('Americas') || groupName.includes('America')) {
+                // Use second additional origin for Americas & Europe, fallback to default
+                originId = selectedOrigins[2] || selectedOrigins[0]; // Second additional or default
+            }
+        } 
+        // For Global 3-Region preset
+        else if (preset === 'global-three') {
+            if (groupName.includes('Asia')) {
+                originId = selectedOrigins[1] || selectedOrigins[0]; // First additional or default
+            } else if (groupName.includes('Americas') || groupName.includes('America')) {
+                originId = selectedOrigins[2] || selectedOrigins[0]; // Second additional or default
+            } else if (groupName.includes('Europe')) {
+                originId = selectedOrigins[3] || selectedOrigins[0]; // Third additional or default
+            }
+        }
+        
+        console.log(`Group: ${groupName}, Origin ID: ${originId}`);
+        
+        // Find the origin name
+        if (originId) {
+            const origin = availableOrigins.find(o => (o.id === originId) || (o.originId === originId));
+            console.log(`Found origin for ${originId}:`, origin);
+            originName = origin ? origin.name : `Unknown (${originId})`;
+        }
+        
+        console.log(`Final origin name for ${groupName}: ${originName}`);
+        
+        // Update origin name display
+        let elementId;
+        if (groupName.includes('Asia')) {
+            elementId = 'asia-origin-name';
+        } else if (groupName.includes('Americas') || groupName.includes('America')) {
+            elementId = 'americas-origin-name';
+        } else if (groupName.includes('Europe')) {
+            elementId = 'europe-origin-name';
+        }
+        
+        if (elementId) {
+            const element = document.getElementById(elementId);
+            if (element) {
+                element.textContent = originName;
+                console.log(`Updated ${elementId} to: ${originName}`);
+            }
+        }
+        
+        // Update regions list
+        const regions = presetConfig.groups[groupName];
+        let regionsContainerId;
+        if (groupName.includes('Asia')) {
+            regionsContainerId = 'asia-regions';
+        } else if (groupName.includes('Americas') || groupName.includes('America')) {
+            regionsContainerId = 'americas-regions';
+        } else if (groupName.includes('Europe')) {
+            regionsContainerId = 'europe-regions';
+        }
+        
+        if (regionsContainerId && regions) {
+            const regionsContainer = document.getElementById(regionsContainerId);
+            if (regionsContainer) {
+                regionsContainer.innerHTML = regions.map(region => 
+                    `<span class="region-item">${region}</span>`
+                ).join('');
+            }
+        }
+    });
+    
+    previewContainer.style.display = 'block';
+}
+
+/**
+ * Validate multi-origin configuration
+ */
+function validateMultiOriginConfiguration() {
+    const enableMultiOriginCheckbox = document.getElementById('enable-multi-origin');
+    if (!enableMultiOriginCheckbox) return true;
+    
+    const isMultiOriginEnabled = enableMultiOriginCheckbox.checked;
+    
+    if (!isMultiOriginEnabled) {
+        clearMultiOriginValidation();
+        return true;
+    }
+    
+    const defaultOriginSelect = document.getElementById('default-origin');
+    const presetSelect = document.getElementById('region-mapping-preset');
+    const additionalOriginSelects = document.querySelectorAll('.additional-origin-select');
+    
+    if (!defaultOriginSelect || !presetSelect) return false;
+    
+    const defaultOriginId = defaultOriginSelect.value;
+    const preset = presetSelect.value;
+    
+    let isValid = true;
+    let errors = [];
+    
+    // Validate default origin
+    if (!defaultOriginId) {
+        errors.push('Default origin is required');
+        markFieldAsError('default-origin');
+        isValid = false;
+    } else {
+        markFieldAsValid('default-origin');
+    }
+    
+    // Validate preset selection
+    if (!preset) {
+        errors.push('Region mapping strategy is required');
+        markFieldAsError('region-mapping-preset');
+        isValid = false;
+    } else {
+        markFieldAsValid('region-mapping-preset');
+        
+        // Validate origin count matches preset requirements
+        const presetConfig = regionMappingPresets[preset];
+        const selectedAdditionalOrigins = Array.from(additionalOriginSelects)
+            .filter(select => select.value)
+            .length;
+        
+        const totalOrigins = 1 + selectedAdditionalOrigins; // 1 for default + additional
+        
+        if (totalOrigins < presetConfig.requiredOrigins) {
+            errors.push(`${presetConfig.name} requires ${presetConfig.requiredOrigins} origins, but only ${totalOrigins} selected`);
+            isValid = false;
+        }
+    }
+    
+    // Validate no duplicate origins
+    const allSelectedOrigins = [defaultOriginId];
+    additionalOriginSelects.forEach(select => {
+        if (select.value) {
+            allSelectedOrigins.push(select.value);
+        }
+    });
+    
+    const uniqueOrigins = new Set(allSelectedOrigins.filter(id => id));
+    if (uniqueOrigins.size !== allSelectedOrigins.filter(id => id).length) {
+        errors.push('Each origin can only be selected once');
+        isValid = false;
+    }
+    
+    // Display validation errors
+    displayMultiOriginValidationErrors(errors);
+    
+    return isValid;
+}
+
+/**
+ * Mark form field as having an error
+ */
+function markFieldAsError(fieldId) {
+    const field = document.getElementById(fieldId);
+    if (!field) return;
+    
+    const formGroup = field.closest('.form-group');
+    if (formGroup) {
+        formGroup.classList.add('error');
+    }
+}
+
+/**
+ * Mark form field as valid
+ */
+function markFieldAsValid(fieldId) {
+    const field = document.getElementById(fieldId);
+    if (!field) return;
+    
+    const formGroup = field.closest('.form-group');
+    if (formGroup) {
+        formGroup.classList.remove('error');
+    }
+}
+
+/**
+ * Display multi-origin validation errors
+ */
+function displayMultiOriginValidationErrors(errors) {
+    // Remove existing error messages
+    const existingErrors = document.querySelectorAll('.multi-origin-validation-error');
+    existingErrors.forEach(error => error.remove());
+    
+    if (errors.length > 0) {
+        const multiOriginConfig = document.getElementById('multi-origin-config');
+        if (multiOriginConfig) {
+            const errorContainer = document.createElement('div');
+            errorContainer.className = 'validation-message multi-origin-validation-error show';
+            errorContainer.innerHTML = `
+                <strong>Multi-Origin Configuration Errors:</strong>
+                <ul>
+                    ${errors.map(error => `<li>${error}</li>`).join('')}
+                </ul>
+            `;
+            multiOriginConfig.insertBefore(errorContainer, multiOriginConfig.firstChild);
+        }
+    }
+}
+
+/**
+ * Clear multi-origin validation
+ */
+function clearMultiOriginValidation() {
+    // Remove error classes
+    const errorFields = document.querySelectorAll('.form-group.error');
+    errorFields.forEach(field => field.classList.remove('error'));
+    
+    // Remove error messages
+    const errorMessages = document.querySelectorAll('.multi-origin-validation-error');
+    errorMessages.forEach(message => message.remove());
+}
+
+/**
+ * Reset multi-origin form
+ */
+function resetMultiOriginForm() {
+    const defaultOriginSelect = document.getElementById('default-origin');
+    const presetSelect = document.getElementById('region-mapping-preset');
+    const additionalOriginsList = document.getElementById('additional-origins-list');
+    const previewContainer = document.getElementById('mapping-preview');
+    
+    // Reset selects
+    if (defaultOriginSelect) defaultOriginSelect.value = '';
+    if (presetSelect) presetSelect.value = '';
+    
+    // Clear additional origins
+    if (additionalOriginsList) {
+        additionalOriginsList.innerHTML = '';
+    }
+    additionalOriginCounter = 0;
+    
+    // Hide preview
+    if (previewContainer) {
+        previewContainer.style.display = 'none';
+    }
+    
+    // Clear validation
+    clearMultiOriginValidation();
+}
+
+/**
+ * Get multi-origin configuration for API submission
+ */
+function getMultiOriginConfiguration() {
+    const enableMultiOriginCheckbox = document.getElementById('enable-multi-origin');
+    if (!enableMultiOriginCheckbox) return null;
+    
+    const isEnabled = enableMultiOriginCheckbox.checked;
+    
+    if (!isEnabled) {
+        return null;
+    }
+    
+    const defaultOriginSelect = document.getElementById('default-origin');
+    const presetSelect = document.getElementById('region-mapping-preset');
+    const additionalOriginSelects = document.querySelectorAll('.additional-origin-select');
+    
+    if (!defaultOriginSelect || !presetSelect) return null;
+    
+    const defaultOriginId = defaultOriginSelect.value;
+    const preset = presetSelect.value;
+    
+    const additionalOriginIds = Array.from(additionalOriginSelects)
+        .map(select => select.value)
+        .filter(value => value);
+    
+    return {
+        defaultOriginId,
+        additionalOriginIds,
+        preset
+    };
+}
+
+// Initialize multi-origin functionality when the page loads
+document.addEventListener('DOMContentLoaded', function() {
+    // Add a small delay to ensure other initialization is complete
+    setTimeout(initializeMultiOrigin, 500);
+});
+// Simple notification function
+function showNotification(message, type = 'info') {
+    console.log(`${type.toUpperCase()}: ${message}`);
+    // For now, just use console.log. Could be enhanced with toast notifications later
 }

@@ -33,9 +33,22 @@ export class CfManagerStatusMonitorStack extends cdk.Stack {
     updateStatusRole.addToPolicy(new iam.PolicyStatement({
       actions: [
         'cloudfront:GetDistribution',
+        'cloudfront:UpdateDistribution',
         'cloudfront:ListDistributions',
       ],
       resources: ['*'],
+    }));
+
+    // Add Lambda permissions for managing Lambda@Edge function permissions
+    updateStatusRole.addToPolicy(new iam.PolicyStatement({
+      actions: [
+        'lambda:AddPermission',
+        'lambda:RemovePermission',
+        'lambda:GetPolicy',
+      ],
+      resources: [
+        `arn:aws:lambda:us-east-1:${this.account}:function:*-multi-origin-func-*`,
+      ],
     }));
 
     // Add DynamoDB permissions to both roles

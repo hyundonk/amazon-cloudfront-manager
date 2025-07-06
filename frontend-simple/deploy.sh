@@ -33,16 +33,19 @@ REGION=$(aws configure get region)
 echo "Getting CloudFormation outputs..."
 USER_POOL_ID=$(aws cloudformation describe-stacks --stack-name CfManagerStack --query "Stacks[0].Outputs[?OutputKey=='UserPoolId'].OutputValue" --output text)
 USER_POOL_CLIENT_ID=$(aws cloudformation describe-stacks --stack-name CfManagerStack --query "Stacks[0].Outputs[?OutputKey=='UserPoolClientId'].OutputValue" --output text)
+CUSTOM_CACHE_POLICY_ID=$(aws cloudformation describe-stacks --stack-name CfManagerStack --query "Stacks[0].Outputs[?OutputKey=='CustomCachePolicyId'].OutputValue" --output text)
 API_URL=$(aws cloudformation describe-stacks --stack-name CfManagerBackendStack --query "Stacks[0].Outputs[?OutputKey=='ApiEndpoint'].OutputValue" --output text)
 UI_BUCKET=$(aws cloudformation describe-stacks --stack-name CfManagerFrontendStack --query "Stacks[0].Outputs[?OutputKey=='UIBucketName'].OutputValue" --output text)
 DISTRIBUTION_ID=$(aws cloudformation describe-stacks --stack-name CfManagerFrontendStack --query "Stacks[0].Outputs[?OutputKey=='CloudFrontDistributionId'].OutputValue" --output text)
 
 # Update environment configuration
 echo "Updating environment configuration..."
+cp js/env.template.js js/env.js
 sed -i.bak "s|{{REGION}}|$REGION|g" js/env.js
 sed -i.bak "s|{{USER_POOL_ID}}|$USER_POOL_ID|g" js/env.js
 sed -i.bak "s|{{USER_POOL_CLIENT_ID}}|$USER_POOL_CLIENT_ID|g" js/env.js
 sed -i.bak "s|{{API_URL}}|$API_URL|g" js/env.js
+sed -i.bak "s|{{CUSTOM_CACHE_POLICY_ID}}|$CUSTOM_CACHE_POLICY_ID|g" js/env.js
 rm js/env.js.bak
 
 # Deploy to S3

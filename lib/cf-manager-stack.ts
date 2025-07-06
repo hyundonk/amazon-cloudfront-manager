@@ -13,6 +13,7 @@ export class CfManagerStack extends cdk.Stack {
   public readonly templatesTable: dynamodb.Table;
   public readonly historyTable: dynamodb.Table;
   public readonly originsTable: dynamodb.Table;
+  public readonly lambdaEdgeFunctionsTable: dynamodb.Table;
   public readonly lambdaExecutionRole: iam.Role;
   public readonly customCachePolicy: cloudfront.CachePolicy;
 
@@ -69,6 +70,22 @@ export class CfManagerStack extends cdk.Stack {
     this.originsTable.addGlobalSecondaryIndex({
       indexName: 'BucketNameIndex',
       partitionKey: { name: 'bucketName', type: dynamodb.AttributeType.STRING },
+      projectionType: dynamodb.ProjectionType.ALL
+    });
+
+    // Lambda@Edge Functions table
+    this.lambdaEdgeFunctionsTable = new dynamodb.Table(this, 'LambdaEdgeFunctionsTable', {
+      partitionKey: { name: 'functionId', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+      pointInTimeRecovery: true,
+    });
+
+    // Add GSI for querying by status
+    this.lambdaEdgeFunctionsTable.addGlobalSecondaryIndex({
+      indexName: 'StatusIndex',
+      partitionKey: { name: 'status', type: dynamodb.AttributeType.STRING },
+      sortKey: { name: 'createdAt', type: dynamodb.AttributeType.STRING },
       projectionType: dynamodb.ProjectionType.ALL
     });
 

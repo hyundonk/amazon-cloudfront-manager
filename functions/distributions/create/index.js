@@ -1,15 +1,18 @@
 // Using AWS SDK v3 modules
 const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
-const { DynamoDBDocumentClient, PutCommand, UpdateCommand, ScanCommand } = require('@aws-sdk/lib-dynamodb');
+const { DynamoDBDocumentClient, PutCommand, UpdateCommand, ScanCommand, GetCommand } = require('@aws-sdk/lib-dynamodb');
 const { 
   CloudFrontClient, 
   CreateDistributionCommand,
   CreateDistributionWithTagsCommand,
   GetDistributionCommand,
-  TagResourceCommand
+  TagResourceCommand,
+  CreateCloudFrontOriginAccessIdentityCommand,
+  GetCloudFrontOriginAccessIdentityCommand
 } = require('@aws-sdk/client-cloudfront');
 const { SFNClient, StartExecutionCommand } = require('@aws-sdk/client-sfn');
-const { S3Client, PutBucketPolicyCommand } = require('@aws-sdk/client-s3');
+const { S3Client, PutBucketPolicyCommand, GetBucketPolicyCommand } = require('@aws-sdk/client-s3');
+const { LambdaClient, CreateFunctionCommand, PublishVersionCommand } = require('@aws-sdk/client-lambda');
 const { v4: uuidv4 } = require('uuid');
 
 // CORS headers
@@ -211,6 +214,414 @@ const getDefaultDistributionConfig = (name, originDomain, originPath = '') => {
   };
 };
 
+// Multi-origin Lambda@Edge functionality
+const { createLambdaEdgeFunction, triggerLambdaEdgeReplication } = require('./lambda-edge-generator');
+
+// Helper function to validate origins for multi-origin distributions
+const validateOrigins = async (multiOriginConfig) => {
+  const { defaultOriginId, additionalOriginIds } = multiOriginConfig;
+  const allOriginIds = [defaultOriginId, ...additionalOriginIds];
+  
+  const origins = {
+    default: null,
+    additional: [],
+    all: []
+  };
+
+  // Fetch all origins from DynamoDB
+  for (const originId of allOriginIds) {
+    const params = {
+      TableName: process.env.ORIGINS_TABLE,
+      Key: { originId }
+    };
+
+    const result = await docClient.send(new GetCommand(params));
+    if (!result.Item) {
+      throw new Error(`Origin not found: ${originId}`);
+    }
+
+    const origin = {
+      originId: result.Item.originId,
+      domainName: result.Item.bucketName + '.s3.' + result.Item.region + '.amazonaws.com',
+      region: result.Item.region,
+      oacId: result.Item.oacId
+    };
+
+    if (originId === defaultOriginId) {
+      origins.default = origin;
+    } else {
+      origins.additional.push(origin);
+    }
+    origins.all.push(origin);
+  }
+
+  if (!origins.default) {
+    throw new Error('Default origin not found');
+  }
+
+  return origins;
+};
+
+// Helper function to create Origin Access Identity for multi-origin distributions
+const createOriginAccessIdentity = async (distributionName) => {
+  try {
+    console.log(`Creating Origin Access Identity for distribution: ${distributionName}`);
+    
+    const oaiParams = {
+      CloudFrontOriginAccessIdentityConfig: {
+        CallerReference: `${distributionName}-oai-${Date.now()}`,
+        Comment: `OAI for multi-origin distribution: ${distributionName}`
+      }
+    };
+    
+    const oaiResult = await cloudfrontClient.send(new CreateCloudFrontOriginAccessIdentityCommand(oaiParams));
+    console.log('Created OAI:', oaiResult.CloudFrontOriginAccessIdentity.Id);
+    
+    return {
+      id: oaiResult.CloudFrontOriginAccessIdentity.Id,
+      s3CanonicalUserId: oaiResult.CloudFrontOriginAccessIdentity.S3CanonicalUserId
+    };
+  } catch (error) {
+    console.error('Error creating Origin Access Identity:', error);
+    throw error;
+  }
+};
+
+// Helper function to update S3 bucket policy for OAI access
+const updateS3BucketPolicyForOAI = async (bucketName, oaiId, distributionArn) => {
+  try {
+    console.log(`Updating S3 bucket policy for OAI access: ${bucketName}`);
+    console.log(`OAI ID: ${oaiId}`);
+    console.log(`Distribution ARN: ${distributionArn}`);
+    
+    const bucketRegion = bucketName.split('.')[2]; // Extract region from domain name
+    const actualBucketName = bucketName.split('.')[0]; // Extract bucket name from domain
+    const s3RegionalClient = new S3Client({ region: bucketRegion });
+    
+    let existingPolicy = null;
+    let existingOAIPrincipals = [];
+    
+    // Try to get existing bucket policy
+    try {
+      const { GetBucketPolicyCommand } = require('@aws-sdk/client-s3');
+      const existingPolicyResult = await s3RegionalClient.send(new GetBucketPolicyCommand({
+        Bucket: actualBucketName
+      }));
+      
+      if (existingPolicyResult.Policy) {
+        existingPolicy = JSON.parse(existingPolicyResult.Policy);
+        console.log(`Found existing bucket policy for ${actualBucketName}`);
+        
+        // Extract existing OAI principals
+        if (existingPolicy.Statement) {
+          existingPolicy.Statement.forEach(statement => {
+            if (statement.Principal && statement.Principal.AWS) {
+              const principals = Array.isArray(statement.Principal.AWS) 
+                ? statement.Principal.AWS 
+                : [statement.Principal.AWS];
+              
+              principals.forEach(principal => {
+                if (typeof principal === 'string' && principal.includes('CloudFront Origin Access Identity')) {
+                  existingOAIPrincipals.push(principal);
+                }
+              });
+            }
+          });
+        }
+      }
+    } catch (error) {
+      if (error.name !== 'NoSuchBucketPolicy') {
+        console.log(`Error reading existing bucket policy: ${error.message}`);
+      } else {
+        console.log(`No existing bucket policy found for ${actualBucketName}`);
+      }
+    }
+    
+    // Add the new OAI principal
+    const newOAIPrincipal = `arn:aws:iam::cloudfront:user/CloudFront Origin Access Identity ${oaiId}`;
+    if (!existingOAIPrincipals.includes(newOAIPrincipal)) {
+      existingOAIPrincipals.push(newOAIPrincipal);
+      console.log(`Added new OAI principal: ${newOAIPrincipal}`);
+    } else {
+      console.log(`OAI principal already exists: ${newOAIPrincipal}`);
+    }
+    
+    // Create or update bucket policy with all OAI principals
+    const bucketPolicy = {
+      Version: "2012-10-17",
+      Statement: []
+    };
+    
+    // Add OAI statement if we have OAI principals
+    if (existingOAIPrincipals.length > 0) {
+      bucketPolicy.Statement.push({
+        Sid: "AllowOriginAccessIdentities",
+        Effect: "Allow",
+        Principal: {
+          AWS: existingOAIPrincipals.length === 1 ? existingOAIPrincipals[0] : existingOAIPrincipals
+        },
+        Action: "s3:GetObject",
+        Resource: `arn:aws:s3:::${actualBucketName}/*`
+      });
+    }
+    
+    // Preserve any existing non-OAI statements (like OAC statements)
+    if (existingPolicy && existingPolicy.Statement) {
+      existingPolicy.Statement.forEach(statement => {
+        // Skip OAI statements as we're rebuilding them
+        if (statement.Sid === 'AllowOriginAccessIdentities' || 
+            statement.Sid === 'AllowOriginAccessIdentity') {
+          return;
+        }
+        
+        // Keep other statements (like OAC statements)
+        bucketPolicy.Statement.push(statement);
+      });
+    }
+    
+    console.log(`Setting bucket policy for ${actualBucketName}:`, JSON.stringify(bucketPolicy, null, 2));
+    
+    const policyParams = {
+      Bucket: actualBucketName,
+      Policy: JSON.stringify(bucketPolicy)
+    };
+    
+    await s3RegionalClient.send(new PutBucketPolicyCommand(policyParams));
+    console.log(`Successfully updated S3 bucket policy for ${bucketName} with ${existingOAIPrincipals.length} OAI principal(s)`);
+  } catch (error) {
+    console.error(`Error updating S3 bucket policy for ${bucketName}:`, error);
+    // Don't throw error as this might not be critical for distribution creation
+  }
+};
+
+// Helper function to update origin with distribution association
+const updateOriginDistributionAssociation = async (originId, distributionArn) => {
+  try {
+    console.log(`Updating origin ${originId} with distribution association: ${distributionArn}`);
+    
+    // Get the current origin record
+    const getParams = {
+      TableName: process.env.ORIGINS_TABLE,
+      Key: { originId: originId }
+    };
+    
+    const originResult = await docClient.send(new GetCommand(getParams));
+    
+    if (originResult.Item) {
+      // Update the origin record to include the distribution ARN
+      const currentDistributions = originResult.Item.associatedDistributions || [];
+      
+      // Add the new distribution ARN if it's not already there
+      if (!currentDistributions.includes(distributionArn)) {
+        currentDistributions.push(distributionArn);
+        
+        const updateParams = {
+          TableName: process.env.ORIGINS_TABLE,
+          Key: { originId: originId },
+          UpdateExpression: 'SET associatedDistributions = :distributions, updatedAt = :updatedAt',
+          ExpressionAttributeValues: {
+            ':distributions': currentDistributions,
+            ':updatedAt': new Date().toISOString()
+          }
+        };
+        
+        await docClient.send(new UpdateCommand(updateParams));
+        console.log(`Updated origin ${originId} with distribution association`);
+      } else {
+        console.log(`Origin ${originId} already associated with distribution ${distributionArn}`);
+      }
+    } else {
+      console.log(`Origin ${originId} not found in database`);
+    }
+  } catch (error) {
+    console.error(`Error updating origin ${originId} association:`, error);
+    // Don't throw error here as this is not critical for distribution creation
+  }
+};
+
+// Helper function to create multi-origin distribution
+const createMultiOriginDistribution = async (body, user) => {
+  const { name, multiOriginConfig, config } = body;
+  
+  console.log('Creating multi-origin distribution:', name);
+  console.log('Multi-origin config:', JSON.stringify(multiOriginConfig, null, 2));
+
+  try {
+    // 1. Validate origins exist in DynamoDB
+    const origins = await validateOrigins(multiOriginConfig);
+    console.log('Validated origins:', origins.all.length);
+
+    // 2. Create Origin Access Identity for all origins in this distribution
+    const oai = await createOriginAccessIdentity(name);
+    console.log('Created OAI for multi-origin distribution:', oai.id);
+
+    // 3. Generate Lambda@Edge function
+    const lambdaEdgeFunction = await createLambdaEdgeFunction({
+      name: `${name}-multi-origin`,
+      origins: origins,
+      preset: multiOriginConfig.preset,
+      createdBy: user
+    });
+    console.log('Created Lambda@Edge function:', lambdaEdgeFunction.functionId);
+
+    // 4. Create CloudFront distribution configuration
+    const distributionConfig = {
+      ...config,
+      CallerReference: `${name}-${Date.now()}`,
+      Comment: config.Comment || `${name} - Multi-Origin Distribution`,
+      Enabled: config.Enabled !== undefined ? config.Enabled : true,
+      
+      // Configure all origins with the same OAI
+      Origins: {
+        Quantity: origins.all.length,
+        Items: origins.all.map(origin => ({
+          Id: origin.originId,
+          DomainName: origin.domainName,
+          OriginPath: '',
+          S3OriginConfig: {
+            OriginAccessIdentity: `origin-access-identity/cloudfront/${oai.id}`
+          },
+          // Remove OAC configuration for Lambda@Edge compatibility
+          ConnectionAttempts: 3,
+          ConnectionTimeout: 10,
+          OriginShield: {
+            Enabled: false
+          }
+        }))
+      },
+
+      // Configure default cache behavior with Lambda@Edge
+      DefaultCacheBehavior: {
+        TargetOriginId: origins.default.originId,
+        ViewerProtocolPolicy: config.DefaultCacheBehavior?.ViewerProtocolPolicy || 'redirect-to-https',
+        AllowedMethods: {
+          Quantity: 2,
+          Items: ['GET', 'HEAD'],
+          CachedMethods: {
+            Quantity: 2,
+            Items: ['GET', 'HEAD']
+          }
+        },
+        CachePolicyId: process.env.CUSTOM_CACHE_POLICY_ID || '658327ea-f89d-4fab-a63d-7e88639e58f6',
+        Compress: false,
+        
+        // Associate Lambda@Edge function
+        LambdaFunctionAssociations: {
+          Quantity: 1,
+          Items: [{
+            LambdaFunctionARN: lambdaEdgeFunction.versionArn,
+            EventType: 'origin-request',
+            IncludeBody: false
+          }]
+        },
+        
+        TrustedSigners: {
+          Enabled: false,
+          Quantity: 0
+        },
+        TrustedKeyGroups: {
+          Enabled: false,
+          Quantity: 0
+        },
+        FieldLevelEncryptionId: ''
+      },
+
+      // Other configuration
+      PriceClass: config.PriceClass || 'PriceClass_100',
+      HttpVersion: 'http2and3',
+      IsIPV6Enabled: true,
+      
+      // SSL configuration if provided
+      ViewerCertificate: config.ViewerCertificate || {
+        CloudFrontDefaultCertificate: true,
+        MinimumProtocolVersion: 'TLSv1.2_2021',
+        SSLSupportMethod: 'sni-only'
+      },
+
+      // Aliases if provided
+      Aliases: config.Aliases || {
+        Quantity: 0,
+        Items: []
+      }
+    };
+
+    console.log('Distribution config prepared');
+
+    // 4. Create CloudFront distribution
+    const createParams = {
+      DistributionConfig: distributionConfig
+    };
+
+    const cfResult = await cloudfrontClient.send(new CreateDistributionCommand(createParams));
+    console.log('CloudFront distribution created:', cfResult.Distribution.Id);
+
+    // 4.1. Schedule Lambda@Edge replication trigger for later (when distribution is deployed)
+    // Instead of waiting synchronously, we'll trigger it asynchronously after distribution deploys
+    console.log('Lambda@Edge replication will be triggered automatically when distribution is deployed');
+
+    // 5. Update S3 bucket policies for all origins to allow OAI access
+    for (const origin of origins.all) {
+      await updateS3BucketPolicyForOAI(origin.domainName, oai.id, cfResult.Distribution.ARN);
+    }
+
+    // 6. Save distribution record to DynamoDB
+    const distributionRecord = {
+      distributionId: 'dist-' + uuidv4().substring(0, 8),
+      name: name,
+      type: 'Multi-Origin',
+      cloudfrontId: cfResult.Distribution.Id,
+      domainName: cfResult.Distribution.DomainName,
+      status: cfResult.Distribution.Status,
+      isMultiOrigin: true,
+      lambdaEdgeFunctionId: lambdaEdgeFunction.functionId,
+      oaiId: oai.id, // Store OAI ID for reference
+      multiOriginConfig: {
+        defaultOriginId: multiOriginConfig.defaultOriginId,
+        additionalOriginIds: multiOriginConfig.additionalOriginIds,
+        preset: multiOriginConfig.preset
+      },
+      config: distributionConfig,
+      createdBy: user,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+
+    await docClient.send(new PutCommand({
+      TableName: process.env.DISTRIBUTIONS_TABLE,
+      Item: distributionRecord
+    }));
+    console.log('Distribution record saved to DynamoDB');
+
+    // 7. Update origins with distribution association
+    for (const origin of origins.all) {
+      await updateOriginDistributionAssociation(origin.originId, cfResult.Distribution.ARN);
+    }
+
+    return {
+      success: true,
+      data: {
+        distribution: {
+          distributionId: distributionRecord.distributionId,
+          cloudfrontId: cfResult.Distribution.Id,
+          domainName: cfResult.Distribution.DomainName,
+          status: cfResult.Distribution.Status,
+          isMultiOrigin: true,
+          lambdaEdgeFunctionId: lambdaEdgeFunction.functionId
+        },
+        lambdaEdgeFunction: {
+          functionId: lambdaEdgeFunction.functionId,
+          functionName: lambdaEdgeFunction.functionName,
+          preset: lambdaEdgeFunction.preset
+        }
+      }
+    };
+
+  } catch (error) {
+    console.error('Error creating multi-origin distribution:', error);
+    throw error;
+  }
+};
+
 exports.handler = async (event) => {
   console.log('Event:', JSON.stringify(event, null, 2));
   
@@ -237,6 +648,15 @@ exports.handler = async (event) => {
     // Get user info from Cognito claims or use a default
     const user = event.requestContext?.authorizer?.claims?.email || 'unknown';
     console.log('User:', user);
+    
+    // Check if this is a multi-origin distribution
+    if (body.isMultiOrigin && body.multiOriginConfig) {
+      console.log('Creating multi-origin distribution');
+      const result = await createMultiOriginDistribution(body, user);
+      return corsResponse(200, result);
+    }
+    
+    // Continue with regular single-origin distribution creation
     
     // Prepare CloudFront distribution configuration
     let distributionConfig;

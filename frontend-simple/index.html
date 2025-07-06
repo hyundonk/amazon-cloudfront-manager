@@ -490,6 +490,100 @@
                         </select>
                     </div>
                 </div>
+                
+                <!-- Multi-Origin Configuration Section -->
+                <div class="form-section" id="multi-origin-section">
+                    <h3>Multi-Origin Configuration</h3>
+                    
+                    <!-- Multi-Origin Toggle -->
+                    <div class="form-group">
+                        <div class="form-check">
+                            <input type="checkbox" id="enable-multi-origin">
+                            <label for="enable-multi-origin">Enable Multi-Origin (Lambda@Edge)</label>
+                            <small class="form-text text-muted">Route requests to different origins based on user location for better performance</small>
+                        </div>
+                    </div>
+                    
+                    <!-- Multi-Origin Configuration Panel (hidden by default) -->
+                    <div id="multi-origin-config" style="display: none;">
+                        <!-- Default Origin Selection -->
+                        <div class="form-group">
+                            <label for="default-origin">Default Origin <span class="required">*</span></label>
+                            <select id="default-origin" required>
+                                <option value="">Select default origin...</option>
+                                <!-- Populated dynamically from existing origins -->
+                            </select>
+                            <small class="form-text text-muted">Used as fallback when region mapping fails</small>
+                        </div>
+                        
+                        <!-- Additional Origins Section -->
+                        <div class="form-group">
+                            <label>Additional Origins</label>
+                            <div id="additional-origins-container">
+                                <div id="additional-origins-list">
+                                    <!-- Dynamic list of additional origin selections -->
+                                </div>
+                                <button type="button" id="add-additional-origin" class="btn btn-sm btn-secondary">
+                                    <i class="fas fa-plus"></i> Add Origin
+                                </button>
+                            </div>
+                            <small class="form-text text-muted">Select 1-2 additional origins for regional routing</small>
+                        </div>
+                        
+                        <!-- Region Mapping Preset -->
+                        <div class="form-group">
+                            <label for="region-mapping-preset">Region Mapping Strategy</label>
+                            <select id="region-mapping-preset" required>
+                                <option value="">Select mapping strategy...</option>
+                                <option value="asia-us">Asia-Pacific + Americas (2 origins)</option>
+                                <option value="global-three">Global 3-Region (3 origins)</option>
+                            </select>
+                            <small class="form-text text-muted">Choose how to map AWS regions to your origins</small>
+                        </div>
+                        
+                        <!-- Mapping Preview Section -->
+                        <div class="mapping-preview" id="mapping-preview" style="display: none;">
+                            <h4>Region Mapping Preview</h4>
+                            <div class="preview-content">
+                                <div class="mapping-groups">
+                                    <div class="mapping-group" id="asia-group">
+                                        <h5>Asia-Pacific Regions</h5>
+                                        <div class="origin-assignment" id="asia-assignment">
+                                            <span class="origin-label">Origin: </span>
+                                            <span class="origin-name" id="asia-origin-name">Not assigned</span>
+                                        </div>
+                                        <div class="regions-list" id="asia-regions">
+                                            <!-- Populated dynamically -->
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="mapping-group" id="americas-group">
+                                        <h5>Americas & Europe</h5>
+                                        <div class="origin-assignment" id="americas-assignment">
+                                            <span class="origin-label">Origin: </span>
+                                            <span class="origin-name" id="americas-origin-name">Not assigned</span>
+                                        </div>
+                                        <div class="regions-list" id="americas-regions">
+                                            <!-- Populated dynamically -->
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="mapping-group" id="europe-group" style="display: none;">
+                                        <h5>Europe & Others</h5>
+                                        <div class="origin-assignment" id="europe-assignment">
+                                            <span class="origin-label">Origin: </span>
+                                            <span class="origin-name" id="europe-origin-name">Not assigned</span>
+                                        </div>
+                                        <div class="regions-list" id="europe-regions">
+                                            <!-- Populated dynamically -->
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
                 <div class="form-check">
                     <input type="checkbox" id="enable-https" checked>
                     <label for="enable-https">Redirect HTTP to HTTPS</label>

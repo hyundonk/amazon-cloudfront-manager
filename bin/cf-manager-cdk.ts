@@ -35,6 +35,7 @@ const backendStack = new CfManagerBackendStack(app, 'CfManagerBackendStack', {
   templatesTable: coreStack.templatesTable,
   historyTable: coreStack.historyTable,
   originsTable: coreStack.originsTable,
+  lambdaEdgeFunctionsTable: coreStack.lambdaEdgeFunctionsTable,
   customCachePolicy: coreStack.customCachePolicy
 });
 

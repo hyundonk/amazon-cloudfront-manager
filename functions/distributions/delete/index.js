@@ -1,7 +1,8 @@
 const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
 const { DynamoDBDocumentClient, GetCommand, DeleteCommand, ScanCommand, UpdateCommand } = require('@aws-sdk/lib-dynamodb');
 const { CloudFrontClient, DeleteDistributionCommand, GetDistributionConfigCommand, UpdateDistributionCommand } = require('@aws-sdk/client-cloudfront');
-const { S3Client, PutBucketPolicyCommand } = require('@aws-sdk/client-s3');
+const { LambdaClient, DeleteFunctionCommand, GetFunctionCommand } = require('@aws-sdk/client-lambda');
+const { S3Client, PutBucketPolicyCommand, GetBucketPolicyCommand } = require('@aws-sdk/client-s3');
 
 // CORS headers
 const CORS_HEADERS = {
@@ -35,6 +36,198 @@ const dynamoClient = new DynamoDBClient();
 const docClient = DynamoDBDocumentClient.from(dynamoClient);
 const cloudfrontClient = new CloudFrontClient();
 const s3Client = new S3Client();
+const lambdaClient = new LambdaClient({ region: 'us-east-1' }); // Lambda@Edge functions are in us-east-1
+
+// Helper function to delete Lambda@Edge function for multi-origin distributions
+async function deleteLambdaEdgeFunction(distributionRecord) {
+  if (!distributionRecord.isMultiOrigin || !distributionRecord.lambdaEdgeFunctionId) {
+    console.log('Not a multi-origin distribution or no Lambda@Edge function, skipping Lambda cleanup');
+    return;
+  }
+  
+  const functionId = distributionRecord.lambdaEdgeFunctionId;
+  console.log(`Deleting Lambda@Edge function: ${functionId}`);
+  
+  try {
+    // Get the Lambda@Edge function record from DynamoDB
+    const functionResult = await docClient.send(new GetCommand({
+      TableName: process.env.LAMBDA_EDGE_FUNCTIONS_TABLE,
+      Key: { functionId: functionId }
+    }));
+    
+    if (!functionResult.Item) {
+      console.log(`Lambda@Edge function record ${functionId} not found in database`);
+      return;
+    }
+    
+    const functionRecord = functionResult.Item;
+    const lambdaFunctionName = functionRecord.functionName;
+    
+    console.log(`Deleting Lambda function: ${lambdaFunctionName}`);
+    
+    // Check if the Lambda function exists
+    try {
+      await lambdaClient.send(new GetFunctionCommand({
+        FunctionName: lambdaFunctionName
+      }));
+      
+      // Function exists, delete it
+      await lambdaClient.send(new DeleteFunctionCommand({
+        FunctionName: lambdaFunctionName
+      }));
+      
+      console.log(`Successfully deleted Lambda function: ${lambdaFunctionName}`);
+    } catch (lambdaError) {
+      if (lambdaError.name === 'ResourceNotFoundException') {
+        console.log(`Lambda function ${lambdaFunctionName} not found, may have been already deleted`);
+      } else {
+        console.error(`Error deleting Lambda function ${lambdaFunctionName}:`, lambdaError);
+        // Don't throw error, continue with cleanup
+      }
+    }
+    
+    // Delete the Lambda@Edge function record from DynamoDB
+    await docClient.send(new DeleteCommand({
+      TableName: process.env.LAMBDA_EDGE_FUNCTIONS_TABLE,
+      Key: { functionId: functionId }
+    }));
+    
+    console.log(`Successfully deleted Lambda@Edge function record: ${functionId}`);
+    
+  } catch (error) {
+    console.error(`Error deleting Lambda@Edge function ${functionId}:`, error);
+    // Don't throw error as this shouldn't block distribution deletion
+  }
+}
+
+// Helper function to remove OAI principal from S3 bucket policies for multi-origin distributions
+async function removeOAIFromS3BucketPolicies(distributionRecord) {
+  if (!distributionRecord.isMultiOrigin || !distributionRecord.oaiId) {
+    console.log('Not a multi-origin distribution or no OAI ID, skipping OAI cleanup');
+    return;
+  }
+  
+  console.log(`Removing OAI ${distributionRecord.oaiId} from S3 bucket policies`);
+  
+  // Get the origins used by this distribution
+  const multiOriginConfig = distributionRecord.multiOriginConfig;
+  if (!multiOriginConfig) {
+    console.log('No multi-origin config found, skipping OAI cleanup');
+    return;
+  }
+  
+  const allOriginIds = [
+    multiOriginConfig.defaultOriginId,
+    ...(multiOriginConfig.additionalOriginIds || [])
+  ];
+  
+  // Get origin details from DynamoDB
+  for (const originId of allOriginIds) {
+    try {
+      const originResult = await docClient.send(new GetCommand({
+        TableName: process.env.ORIGINS_TABLE,
+        Key: { originId: originId }
+      }));
+      
+      if (!originResult.Item) {
+        console.log(`Origin ${originId} not found in database`);
+        continue;
+      }
+      
+      const origin = originResult.Item;
+      const bucketName = origin.bucketName;
+      const bucketRegion = origin.region;
+      
+      console.log(`Removing OAI from bucket policy: ${bucketName}`);
+      
+      // Create regional S3 client
+      const s3RegionalClient = new S3Client({ region: bucketRegion });
+      
+      // Get existing bucket policy
+      let existingPolicy = null;
+      try {
+        const existingPolicyResult = await s3RegionalClient.send(new GetBucketPolicyCommand({
+          Bucket: bucketName
+        }));
+        
+        if (existingPolicyResult.Policy) {
+          existingPolicy = JSON.parse(existingPolicyResult.Policy);
+        }
+      } catch (error) {
+        if (error.name !== 'NoSuchBucketPolicy') {
+          console.error(`Error reading bucket policy for ${bucketName}:`, error);
+        }
+        continue;
+      }
+      
+      if (!existingPolicy || !existingPolicy.Statement) {
+        console.log(`No existing policy found for bucket ${bucketName}`);
+        continue;
+      }
+      
+      // Remove the OAI principal from the policy
+      const oaiPrincipalToRemove = `arn:aws:iam::cloudfront:user/CloudFront Origin Access Identity ${distributionRecord.oaiId}`;
+      let policyModified = false;
+      
+      existingPolicy.Statement = existingPolicy.Statement.map(statement => {
+        if (statement.Sid === 'AllowOriginAccessIdentities' || 
+            statement.Sid === 'AllowOriginAccessIdentity') {
+          
+          if (statement.Principal && statement.Principal.AWS) {
+            let principals = Array.isArray(statement.Principal.AWS) 
+              ? statement.Principal.AWS 
+              : [statement.Principal.AWS];
+            
+            // Remove the OAI principal
+            const filteredPrincipals = principals.filter(principal => 
+              principal !== oaiPrincipalToRemove
+            );
+            
+            if (filteredPrincipals.length !== principals.length) {
+              policyModified = true;
+              console.log(`Removed OAI principal from bucket ${bucketName}`);
+            }
+            
+            if (filteredPrincipals.length === 0) {
+              // If no OAI principals left, remove the entire statement
+              return null;
+            } else if (filteredPrincipals.length === 1) {
+              // Single principal, use string format
+              statement.Principal.AWS = filteredPrincipals[0];
+            } else {
+              // Multiple principals, use array format
+              statement.Principal.AWS = filteredPrincipals;
+            }
+          }
+        }
+        return statement;
+      }).filter(statement => statement !== null); // Remove null statements
+      
+      // Update the bucket policy if it was modified
+      if (policyModified) {
+        if (existingPolicy.Statement.length === 0) {
+          // If no statements left, create minimal policy
+          existingPolicy.Statement = [];
+        }
+        
+        console.log(`Updating bucket policy for ${bucketName}:`, JSON.stringify(existingPolicy, null, 2));
+        
+        await s3RegionalClient.send(new PutBucketPolicyCommand({
+          Bucket: bucketName,
+          Policy: JSON.stringify(existingPolicy)
+        }));
+        
+        console.log(`Successfully removed OAI from bucket policy: ${bucketName}`);
+      } else {
+        console.log(`No OAI principal found in bucket policy: ${bucketName}`);
+      }
+      
+    } catch (error) {
+      console.error(`Error removing OAI from bucket ${originId}:`, error);
+      // Continue with other origins
+    }
+  }
+}
 
 // Helper function to remove distribution ARN from origin OAC policy
 async function removeDistributionFromOriginOAC(distributionConfig, distributionArn) {
@@ -195,13 +388,32 @@ exports.handler = async (event) => {
         const config = configResult.DistributionConfig;
         const distributionArn = result.Item.arn;
         
-        // Update origin OAC policies to remove this distribution
-        if (distributionArn) {
+        // Update origin policies based on distribution type
+        if (result.Item.isMultiOrigin) {
+          // For multi-origin distributions, remove OAI from S3 bucket policies
           try {
-            await removeDistributionFromOriginOAC(config, distributionArn);
-          } catch (oacError) {
-            console.error('Error updating origin OAC policy:', oacError);
-            // Continue with distribution deletion even if OAC update fails
+            await removeOAIFromS3BucketPolicies(result.Item);
+          } catch (oaiError) {
+            console.error('Error removing OAI from S3 bucket policies:', oaiError);
+            // Continue with distribution deletion even if OAI cleanup fails
+          }
+          
+          // Delete the associated Lambda@Edge function
+          try {
+            await deleteLambdaEdgeFunction(result.Item);
+          } catch (lambdaError) {
+            console.error('Error deleting Lambda@Edge function:', lambdaError);
+            // Continue with distribution deletion even if Lambda cleanup fails
+          }
+        } else {
+          // For single-origin distributions, update OAC policies
+          if (distributionArn) {
+            try {
+              await removeDistributionFromOriginOAC(config, distributionArn);
+            } catch (oacError) {
+              console.error('Error updating origin OAC policy:', oacError);
+              // Continue with distribution deletion even if OAC update fails
+            }
           }
         }
         

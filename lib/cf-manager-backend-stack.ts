@@ -17,6 +17,7 @@ interface CfManagerBackendStackProps extends cdk.StackProps {
   templatesTable: dynamodb.Table;
   historyTable: dynamodb.Table;
   originsTable: dynamodb.Table;
+  lambdaEdgeFunctionsTable: dynamodb.Table;
   customCachePolicy: cloudfront.CachePolicy;
 }
 
@@ -61,12 +62,16 @@ export class CfManagerBackendStack extends cdk.Stack {
       TEMPLATES_TABLE: props.templatesTable.tableName,
       HISTORY_TABLE: props.historyTable.tableName,
       ORIGINS_TABLE: props.originsTable.tableName,
+      LAMBDA_EDGE_FUNCTIONS_TABLE: props.lambdaEdgeFunctionsTable.tableName,
       CUSTOM_CACHE_POLICY_ID: props.customCachePolicy.cachePolicyId,
     };
 
-    // Lambda execution role
+    // Lambda execution role with Lambda@Edge support
     const lambdaRole = new iam.Role(this, 'LambdaRole', {
-      assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com'),
+      assumedBy: new iam.CompositePrincipal(
+        new iam.ServicePrincipal('lambda.amazonaws.com'),
+        new iam.ServicePrincipal('edgelambda.amazonaws.com')
+      ),
       managedPolicies: [
         iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaBasicExecutionRole')
       ]
@@ -128,11 +133,46 @@ export class CfManagerBackendStack extends cdk.Stack {
       resources: ['*']
     }));
 
+    // Add Lambda@Edge function creation permissions
+    lambdaRole.addToPolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'lambda:CreateFunction',
+        'lambda:PublishVersion',
+        'lambda:GetFunction',
+        'lambda:DeleteFunction',
+        'lambda:UpdateFunctionCode',
+        'lambda:UpdateFunctionConfiguration',
+        'lambda:AddPermission',
+        'lambda:RemovePermission',
+        'lambda:TagResource',
+        'lambda:UntagResource',
+        'lambda:ListTags',
+        'lambda:EnableReplication*'
+      ],
+      resources: [
+        'arn:aws:lambda:us-east-1:*:function:*-multi-origin-func-*',
+        'arn:aws:lambda:*:*:function:*-multi-origin-func-*'
+      ]
+    }));
+
+    // Add IAM permissions for Lambda@Edge execution role
+    lambdaRole.addToPolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'iam:PassRole'
+      ],
+      resources: [
+        lambdaRole.roleArn
+      ]
+    }));
+
     // Grant DynamoDB permissions
     props.distributionsTable.grantReadWriteData(lambdaRole);
     props.templatesTable.grantReadWriteData(lambdaRole);
     props.historyTable.grantReadWriteData(lambdaRole);
     props.originsTable.grantReadWriteData(lambdaRole);  // Add permissions for Origins table
+    props.lambdaEdgeFunctionsTable.grantReadWriteData(lambdaRole);  // Add permissions for Lambda@Edge Functions table
 
     // Define Step Function Lambda functions first
     const checkDeploymentStatus = new lambda.Function(this, 'CheckDeploymentStatusFunction', {
@@ -272,7 +312,7 @@ export class CfManagerBackendStack extends cdk.Stack {
           command: [
             'bash', '-c', [
               'npm install',
-              'npm install @aws-sdk/client-dynamodb @aws-sdk/lib-dynamodb @aws-sdk/client-cloudfront @aws-sdk/client-sfn @aws-sdk/client-s3',
+              'npm install @aws-sdk/client-dynamodb @aws-sdk/lib-dynamodb @aws-sdk/client-cloudfront @aws-sdk/client-sfn @aws-sdk/client-s3 @aws-sdk/client-lambda jszip',
               'cp -r /asset-input/* /asset-output/',
               'cp -r node_modules /asset-output/'
             ].join(' && ')
@@ -280,7 +320,7 @@ export class CfManagerBackendStack extends cdk.Stack {
           local: {
             tryBundle(outputDir: string) {
               require('child_process').execSync(
-                `cd functions/distributions/create && npm install && npm install @aws-sdk/client-dynamodb @aws-sdk/lib-dynamodb @aws-sdk/client-cloudfront @aws-sdk/client-sfn @aws-sdk/client-s3 && mkdir -p ${outputDir} && cp -r * ${outputDir} && cp -r node_modules ${outputDir}`,
+                `cd functions/distributions/create && npm install && npm install @aws-sdk/client-dynamodb @aws-sdk/lib-dynamodb @aws-sdk/client-cloudfront @aws-sdk/client-sfn @aws-sdk/client-s3 @aws-sdk/client-lambda jszip && mkdir -p ${outputDir} && cp -r * ${outputDir} && cp -r node_modules ${outputDir}`,
                 { stdio: 'inherit' }
               );
               return true;
@@ -291,7 +331,8 @@ export class CfManagerBackendStack extends cdk.Stack {
       environment: {
         ...lambdaEnv,
         AWS_ACCOUNT_ID: this.account,
-        DEPLOYMENT_STATE_MACHINE_ARN: deploymentStateMachine.stateMachineArn
+        DEPLOYMENT_STATE_MACHINE_ARN: deploymentStateMachine.stateMachineArn,
+        LAMBDA_EDGE_EXECUTION_ROLE_ARN: lambdaRole.roleArn
       },
       role: lambdaRole,
       timeout: cdk.Duration.seconds(60), // Increased timeout for CloudFront operations
@@ -495,6 +536,63 @@ export class CfManagerBackendStack extends cdk.Stack {
       timeout: cdk.Duration.seconds(60),
       memorySize: 256,
       description: 'Deletes an S3 origin for CloudFront distributions'
+    });
+
+    // Lambda@Edge Functions
+    const createLambdaEdgeFunctionFunction = new lambda.Function(this, 'CreateLambdaEdgeFunctionFunction', {
+      runtime: lambda.Runtime.NODEJS_18_X,
+      handler: 'index.handler',
+      code: lambda.Code.fromAsset('functions/lambda-edge/create', {
+        bundling: {
+          image: lambda.Runtime.NODEJS_18_X.bundlingImage,
+          user: 'root',
+          command: [
+            'bash', '-c',
+            'npm install @aws-sdk/client-lambda @aws-sdk/client-dynamodb @aws-sdk/lib-dynamodb jszip uuid && cp -r /asset-input/* /asset-output/ && chown -R 1000:1000 /asset-output'
+          ]
+        }
+      }),
+      environment: {
+        ...lambdaEnv,
+        LAMBDA_EDGE_EXECUTION_ROLE_ARN: lambdaRole.roleArn
+      },
+      role: lambdaRole,
+      timeout: cdk.Duration.seconds(60),
+      memorySize: 256,
+      description: 'Creates Lambda@Edge functions for multi-origin routing'
+    });
+
+    const listLambdaEdgeFunctionsFunction = new lambda.Function(this, 'ListLambdaEdgeFunctionsFunction', {
+      runtime: lambda.Runtime.NODEJS_18_X,
+      handler: 'index.handler',
+      code: lambda.Code.fromAsset('functions/lambda-edge/list'),
+      environment: lambdaEnv,
+      role: lambdaRole,
+      timeout: cdk.Duration.seconds(30),
+      memorySize: 256,
+      description: 'Lists Lambda@Edge functions'
+    });
+
+    const getLambdaEdgeFunctionFunction = new lambda.Function(this, 'GetLambdaEdgeFunctionFunction', {
+      runtime: lambda.Runtime.NODEJS_18_X,
+      handler: 'index.handler',
+      code: lambda.Code.fromAsset('functions/lambda-edge/get'),
+      environment: lambdaEnv,
+      role: lambdaRole,
+      timeout: cdk.Duration.seconds(30),
+      memorySize: 256,
+      description: 'Gets a Lambda@Edge function'
+    });
+
+    const previewLambdaEdgeFunctionFunction = new lambda.Function(this, 'PreviewLambdaEdgeFunctionFunction', {
+      runtime: lambda.Runtime.NODEJS_18_X,
+      handler: 'index.handler',
+      code: lambda.Code.fromAsset('functions/lambda-edge/preview'),
+      environment: lambdaEnv,
+      role: lambdaRole,
+      timeout: cdk.Duration.seconds(30),
+      memorySize: 256,
+      description: 'Previews Lambda@Edge function code'
     });
 
     // Create Lambda functions for templates
@@ -738,6 +836,12 @@ export class CfManagerBackendStack extends cdk.Stack {
     const templateResource = templatesResource.addResource('{id}');
     const templateApplyResource = templateResource.addResource('apply');
 
+    // Lambda@Edge API resources
+    const lambdaEdgeResource = this.api.root.addResource('lambda-edge');
+    const lambdaEdgeFunctionsResource = lambdaEdgeResource.addResource('functions');
+    const lambdaEdgeFunctionResource = lambdaEdgeFunctionsResource.addResource('{id}');
+    const lambdaEdgePreviewResource = lambdaEdgeResource.addResource('preview');
+
     // Configure API methods for distributions
     distributionsResource.addMethod('GET', new apigateway.LambdaIntegration(listDistributionsFunction), {
       authorizer,
@@ -875,6 +979,27 @@ export class CfManagerBackendStack extends cdk.Stack {
     });
 
     originResource.addMethod('DELETE', new apigateway.LambdaIntegration(deleteOriginFunction), {
+      authorizer,
+      authorizationType: apigateway.AuthorizationType.COGNITO
+    });
+
+    // Configure API methods for Lambda@Edge functions
+    lambdaEdgeFunctionsResource.addMethod('GET', new apigateway.LambdaIntegration(listLambdaEdgeFunctionsFunction), {
+      authorizer,
+      authorizationType: apigateway.AuthorizationType.COGNITO
+    });
+
+    lambdaEdgeFunctionsResource.addMethod('POST', new apigateway.LambdaIntegration(createLambdaEdgeFunctionFunction), {
+      authorizer,
+      authorizationType: apigateway.AuthorizationType.COGNITO
+    });
+
+    lambdaEdgeFunctionResource.addMethod('GET', new apigateway.LambdaIntegration(getLambdaEdgeFunctionFunction), {
+      authorizer,
+      authorizationType: apigateway.AuthorizationType.COGNITO
+    });
+
+    lambdaEdgePreviewResource.addMethod('POST', new apigateway.LambdaIntegration(previewLambdaEdgeFunctionFunction), {
       authorizer,
       authorizationType: apigateway.AuthorizationType.COGNITO
     });

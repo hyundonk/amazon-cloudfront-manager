@@ -466,6 +466,988 @@ aws s3 sync ./frontend/build/ s3://BUCKET_NAME --delete
 aws cloudfront create-invalidation --distribution-id DISTRIBUTION_ID --paths "/*"
 ```
 
+## API Architecture and Communication
+
+The CloudFront Manager uses a multi-layered API architecture with two main communication patterns:
+
+### 1. Frontend Application ↔ API Gateway Communication
+
+#### **HTTP REST APIs via HTTPS**
+
+The frontend JavaScript application communicates with AWS API Gateway using standard HTTP REST APIs with JWT authentication:
+
+```javascript
+// Base API URL from environment configuration
+const API_BASE_URL = 'https://20dnuxjzrd.execute-api.ap-northeast-1.amazonaws.com/api/'
+
+// Generic API call function with Cognito JWT authentication
+async function apiCall(endpoint, method = 'GET', data = null) {
+    const url = `${API_BASE_URL}${endpoint.startsWith('/') ? endpoint.slice(1) : endpoint}`;
+    
+    const options = {
+        method: method,
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${getAuthToken()}` // Cognito JWT token
+        }
+    };
+    
+    if (data && (method === 'POST' || method === 'PUT')) {
+        options.body = JSON.stringify(data);
+    }
+    
+    const response = await fetch(url, options);
+    return await response.json();
+}
+```
+
+#### **Authentication & Authorization**
+- **Cognito JWT tokens** included in all API requests
+- **API Gateway Cognito Authorizer** validates tokens before routing to Lambda functions
+- **CORS headers** included in all responses for cross-origin browser requests
+
+#### **CORS Configuration**
+```javascript
+// All API responses include standardized CORS headers
+const CORS_HEADERS = {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Headers': 'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token',
+    'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS',
+    'Access-Control-Allow-Credentials': 'true'
+};
+```
+
+### 2. Lambda Functions ↔ AWS Control Plane APIs
+
+#### **AWS SDK v3 Integration**
+
+Lambda functions use AWS SDK v3 to interact with various AWS services for infrastructure management:
+
+#### **CloudFront Service APIs**
+```javascript
+const { CloudFrontClient, CreateDistributionCommand, GetDistributionCommand } = require('@aws-sdk/client-cloudfront');
+
+const cloudfront = new CloudFrontClient({ region: 'us-east-1' }); // CloudFront is global but uses us-east-1
+
+// Create CloudFront Distribution
+const createParams = {
+    DistributionConfig: {
+        CallerReference: `${name}-${Date.now()}`,
+        Comment: `${name} - CloudFront Distribution`,
+        Enabled: true,
+        Origins: { /* S3 origin configuration */ },
+        DefaultCacheBehavior: { 
+            CachePolicyId: process.env.CUSTOM_CACHE_POLICY_ID,
+            ViewerProtocolPolicy: 'redirect-to-https'
+        }
+    }
+};
+
+const result = await cloudfront.send(new CreateDistributionCommand(createParams));
+```
+
+#### **DynamoDB APIs for State Management**
+```javascript
+const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
+const { DynamoDBDocumentClient, PutCommand, GetCommand, ScanCommand } = require('@aws-sdk/lib-dynamodb');
+
+const dynamodb = new DynamoDBDocumentClient(DynamoDBClient.from(new DynamoDBClient()));
+
+// Store distribution record with metadata
+await dynamodb.send(new PutCommand({
+    TableName: process.env.DISTRIBUTIONS_TABLE,
+    Item: {
+        distributionId: distributionId,
+        name: name,
+        cloudfrontId: cfResult.Distribution.Id,
+        status: cfResult.Distribution.Status,
+        isMultiOrigin: false,
+        createdAt: new Date().toISOString(),
+        config: distributionConfig
+    }
+}));
+```
+
+#### **S3 APIs for Origin Management**
+```javascript
+const { S3Client, CreateBucketCommand, PutBucketPolicyCommand, PutBucketWebsiteCommand } = require('@aws-sdk/client-s3');
+
+const s3 = new S3Client({ region: originRegion });
+
+// Create S3 bucket for CloudFront origin
+await s3.send(new CreateBucketCommand({
+    Bucket: bucketName,
+    CreateBucketConfiguration: {
+        LocationConstraint: region !== 'us-east-1' ? region : undefined
+    }
+}));
+
+// Configure bucket policy for Origin Access Control (OAC)
+await s3.send(new PutBucketPolicyCommand({
+    Bucket: bucketName,
+    Policy: JSON.stringify({
+        Version: "2012-10-17",
+        Statement: [{
+            Effect: "Allow",
+            Principal: { Service: "cloudfront.amazonaws.com" },
+            Action: "s3:GetObject",
+            Resource: `arn:aws:s3:::${bucketName}/*`,
+            Condition: {
+                StringEquals: {
+                    "AWS:SourceArn": distributionArn
+                }
+            }
+        }]
+    })
+}));
+```
+
+#### **AWS Certificate Manager (ACM) APIs**
+```javascript
+const { ACMClient, ListCertificatesCommand, DescribeCertificateCommand } = require('@aws-sdk/client-acm');
+
+const acm = new ACMClient({ region: 'us-east-1' }); // ACM for CloudFront must be in us-east-1
+
+// List available SSL certificates for CloudFront
+const certificates = await acm.send(new ListCertificatesCommand({
+    CertificateStatuses: ['ISSUED'],
+    Includes: {
+        keyTypes: ['RSA-2048', 'EC-256']
+    }
+}));
+```
+
+#### **Lambda APIs for Lambda@Edge Functions**
+```javascript
+const { LambdaClient, CreateFunctionCommand, PublishVersionCommand } = require('@aws-sdk/client-lambda');
+
+const lambda = new LambdaClient({ region: 'us-east-1' }); // Lambda@Edge must be in us-east-1
+
+// Create Lambda@Edge function for multi-origin routing
+await lambda.send(new CreateFunctionCommand({
+    FunctionName: functionName,
+    Runtime: 'nodejs18.x',
+    Role: process.env.LAMBDA_EDGE_EXECUTION_ROLE_ARN,
+    Handler: 'index.handler',
+    Code: { ZipFile: Buffer.from(generatedFunctionCode) },
+    Description: 'Lambda@Edge function for multi-origin routing',
+    Timeout: 5,
+    MemorySize: 128,
+    Publish: true // Required for Lambda@Edge association
+}));
+```
+
+#### **Step Functions APIs for Workflow Orchestration**
+```javascript
+const { SFNClient, StartExecutionCommand } = require('@aws-sdk/client-sfn');
+
+const stepfunctions = new SFNClient({ region: process.env.AWS_REGION });
+
+// Start distribution status monitoring workflow
+await stepfunctions.send(new StartExecutionCommand({
+    stateMachineArn: process.env.STATUS_MONITOR_STATE_MACHINE_ARN,
+    input: JSON.stringify({
+        distributionId: distributionId,
+        cloudfrontId: cfResult.Distribution.Id,
+        action: 'monitor_deployment'
+    })
+}));
+```
+
+### **IAM Permissions & Service Integration**
+
+#### **Lambda Execution Role Permissions**
+```json
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+                "cloudfront:CreateDistribution",
+                "cloudfront:GetDistribution",
+                "cloudfront:UpdateDistribution",
+                "cloudfront:DeleteDistribution",
+                "cloudfront:CreateInvalidation",
+                "cloudfront:CreateOriginAccessControl",
+                "cloudfront:DeleteOriginAccessControl"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Effect": "Allow",
+            "Action": [
+                "s3:CreateBucket",
+                "s3:DeleteBucket",
+                "s3:PutBucketPolicy",
+                "s3:PutBucketWebsite",
+                "s3:PutBucketCors",
+                "s3:ListBucket"
+            ],
+            "Resource": "*"
+        },
+        {
+            "Effect": "Allow",
+            "Action": [
+                "dynamodb:GetItem",
+                "dynamodb:PutItem",
+                "dynamodb:UpdateItem",
+                "dynamodb:DeleteItem",
+                "dynamodb:Scan",
+                "dynamodb:Query"
+            ],
+            "Resource": [
+                "arn:aws:dynamodb:*:*:table/distributions",
+                "arn:aws:dynamodb:*:*:table/templates",
+                "arn:aws:dynamodb:*:*:table/origins",
+                "arn:aws:dynamodb:*:*:table/lambda-edge-functions"
+            ]
+        },
+        {
+            "Effect": "Allow",
+            "Action": [
+                "lambda:CreateFunction",
+                "lambda:PublishVersion",
+                "lambda:GetFunction",
+                "lambda:DeleteFunction"
+            ],
+            "Resource": "arn:aws:lambda:us-east-1:*:function:*"
+        }
+    ]
+}
+```
+
+### **Error Handling & Resilience Patterns**
+
+#### **AWS SDK Error Handling**
+```javascript
+try {
+    const result = await cloudfront.send(new CreateDistributionCommand(params));
+    return { success: true, data: result };
+} catch (error) {
+    console.error('CloudFront API Error:', error);
+    
+    // Handle specific AWS service errors
+    if (error.name === 'InvalidArgument') {
+        return { success: false, error: 'Invalid distribution configuration', details: error.message };
+    } else if (error.name === 'TooManyDistributions') {
+        return { success: false, error: 'Distribution limit exceeded' };
+    } else if (error.name === 'DistributionAlreadyExists') {
+        return { success: false, error: 'Distribution with this configuration already exists' };
+    } else {
+        return { success: false, error: 'Failed to create distribution', details: error.message };
+    }
+}
+```
+
+### **Regional Architecture Considerations**
+
+#### **Service Regional Requirements**
+- **API Gateway**: Deployed in `ap-northeast-1` (primary region)
+- **CloudFront APIs**: Global service, accessed via `us-east-1` endpoint
+- **Lambda@Edge Functions**: Must be created in `us-east-1` region
+- **ACM Certificates**: Must be in `us-east-1` for CloudFront usage
+- **DynamoDB Tables**: Deployed in `ap-northeast-1` (primary region)
+- **S3 Origins**: Can be in any region based on user selection
+- **Step Functions**: Deployed in `ap-northeast-1` (primary region)
+
+#### **Cross-Region API Calls**
+```javascript
+// Different AWS service clients for different regions
+const cloudfrontClient = new CloudFrontClient({ region: 'us-east-1' });    // Global service
+const acmClient = new ACMClient({ region: 'us-east-1' });                  // For CloudFront certs
+const lambdaEdgeClient = new LambdaClient({ region: 'us-east-1' });        // Lambda@Edge
+const dynamodbClient = new DynamoDBClient({ region: 'ap-northeast-1' });   // Primary region
+const s3Client = new S3Client({ region: originRegion });                   // Origin-specific region
+```
+
+### **Asynchronous Operation Patterns**
+
+#### **Long-Running Operations**
+- **Distribution Creation**: Immediate API response, status monitoring via Step Functions
+- **Status Updates**: CloudWatch Events trigger periodic status checks
+- **Cache Invalidations**: Asynchronous CloudFront operations with status polling
+
+#### **Event-Driven Architecture**
+```javascript
+// CloudWatch Events rule for status monitoring
+const statusMonitorRule = new events.Rule(this, 'StatusMonitorRule', {
+    schedule: events.Schedule.rate(cdk.Duration.minutes(5)),
+    description: 'Triggers distribution status monitoring every 5 minutes'
+});
+
+statusMonitorRule.addTarget(new targets.LambdaFunction(findPendingDistributionsFunction));
+```
+
+This comprehensive API architecture ensures reliable communication between the frontend interface and AWS infrastructure services, with proper error handling, authentication, and regional considerations for optimal performance and security.
+
+## Multi-Origin Lambda@Edge Implementation: Tips and Lessons Learned
+
+This section documents the key insights, challenges, and solutions encountered during the implementation of the multi-origin Lambda@Edge functionality in the CloudFront Manager. These lessons learned will help future developers avoid common pitfalls and implement similar features more efficiently.
+
+### **Overview of Multi-Origin Lambda@Edge System**
+
+The multi-origin Lambda@Edge feature enables CloudFront distributions to route requests to different S3 origins based on the viewer's geographic location. This provides optimal performance by serving content from the closest regional origin.
+
+**Key Components:**
+- **Frontend Interface**: Multi-origin configuration UI with region mapping and preview
+- **Backend API**: Lambda functions for creating and managing Lambda@Edge functions
+- **Lambda@Edge Functions**: Dynamically generated routing logic deployed to CloudFront edge locations
+- **DynamoDB Storage**: Persistent storage for Lambda@Edge function metadata and configurations
+
+### **Critical Implementation Lessons**
+
+#### **1. Environment Variable Management in Browser vs. Node.js**
+
+**Problem**: Frontend JavaScript tried to access `process.env.CUSTOM_CACHE_POLICY_ID`, causing `ReferenceError: process is not defined`.
+
+**Root Cause**: `process.env` is a Node.js environment variable that doesn't exist in browser JavaScript environments.
+
+**Solution**: Implement proper environment configuration pattern:
+```javascript
+// ❌ Wrong - Browser doesn't have process.env
+CachePolicyId: process.env.CUSTOM_CACHE_POLICY_ID
+
+// ✅ Correct - Use window.ENV for browser
+CachePolicyId: window.ENV.CUSTOM_CACHE_POLICY_ID
+```
+
+**Implementation Pattern:**
+1. Create `env.template.js` with placeholders: `{{CUSTOM_CACHE_POLICY_ID}}`
+2. Update `deploy.sh` to replace placeholders with CloudFormation outputs
+3. Use `window.ENV` object in frontend JavaScript
+
+**Key Takeaway**: Always distinguish between server-side (Node.js) and client-side (browser) environment variable access patterns.
+
+#### **2. AWS SDK Version Compatibility**
+
+**Problem**: Lambda@Edge generator used AWS SDK v2 (`aws-sdk`) while the main function used AWS SDK v3 (`@aws-sdk/*`), causing import errors.
+
+**Root Cause**: Mixing different versions of AWS SDK in the same Lambda function package.
+
+**Solution**: Standardize on AWS SDK v3 throughout the application:
+```javascript
+// ❌ Wrong - AWS SDK v2
+const AWS = require('aws-sdk');
+const lambda = new AWS.Lambda({ region: 'us-east-1' });
+await lambda.createFunction(params).promise();
+
+// ✅ Correct - AWS SDK v3
+const { LambdaClient, CreateFunctionCommand } = require('@aws-sdk/client-lambda');
+const lambda = new LambdaClient({ region: 'us-east-1' });
+await lambda.send(new CreateFunctionCommand(params));
+```
+
+**Key Takeaway**: Maintain consistency in AWS SDK versions across all Lambda functions and shared modules.
+
+#### **3. Lambda Function Packaging and ZIP File Creation**
+
+**Problem**: `InvalidParameterValueException: Could not unzip uploaded file` when creating Lambda@Edge functions.
+
+**Root Cause**: Attempting to create Lambda functions with raw JavaScript strings instead of proper ZIP files.
+
+**Solution**: Use JSZip library to create proper ZIP packages:
+```javascript
+// ❌ Wrong - Raw string buffer
+Code: {
+    ZipFile: Buffer.from(code)
+}
+
+// ✅ Correct - Proper ZIP file
+const JSZip = require('jszip');
+const zip = new JSZip();
+zip.file('index.js', code);
+const zipBuffer = await zip.generateAsync({ type: 'nodebuffer' });
+
+Code: {
+    ZipFile: zipBuffer
+}
+```
+
+**CDK Bundling Update**: Include JSZip in Lambda function dependencies:
+```typescript
+'npm install @aws-sdk/client-lambda jszip'
+```
+
+**Key Takeaway**: Lambda functions require properly formatted ZIP files, not raw code strings.
+
+#### **4. IAM Permissions for Cross-Service Operations**
+
+**Problem**: `AccessDeniedException` when Lambda functions tried to create other Lambda functions.
+
+**Root Cause**: Lambda execution role lacked permissions to create Lambda@Edge functions in us-east-1 region.
+
+**Solution**: Add comprehensive IAM permissions:
+```json
+{
+    "Effect": "Allow",
+    "Action": [
+        "lambda:CreateFunction",
+        "lambda:PublishVersion",
+        "lambda:GetFunction",
+        "lambda:DeleteFunction",
+        "iam:PassRole"
+    ],
+    "Resource": [
+        "arn:aws:lambda:us-east-1:*:function:*-multi-origin-func-*",
+        "arn:aws:iam::*:role/LambdaExecutionRole"
+    ]
+}
+```
+
+**Key Takeaway**: Lambda functions creating other AWS resources need explicit IAM permissions for those operations.
+
+#### **5. Lambda@Edge Versioned ARN Requirement**
+
+**Problem**: `InvalidLambdaFunctionAssociation: The function ARN must reference a specific function version`.
+
+**Root Cause**: CloudFront requires Lambda@Edge function ARNs to include version numbers (e.g., `:1`, `:2`).
+
+**Solution**: Ensure versioned ARNs are used:
+```javascript
+// ❌ Wrong - Unversioned ARN
+LambdaFunctionARN: "arn:aws:lambda:us-east-1:123456789012:function:my-function"
+
+// ✅ Correct - Versioned ARN
+LambdaFunctionARN: "arn:aws:lambda:us-east-1:123456789012:function:my-function:1"
+
+// Implementation
+if (!functionData.versionArn.match(/:\d+$/)) {
+    functionData.versionArn = `${lambdaResult.FunctionArn}:${lambdaResult.Version || '1'}`;
+}
+```
+
+**Key Takeaway**: Always use versioned ARNs when associating Lambda@Edge functions with CloudFront distributions.
+
+#### **6. Lambda Function Active State Wait Logic**
+
+**Problem**: `InvalidLambdaFunctionAssociation: The function must be in an Active state. The current state for function ... is Pending`.
+
+**Root Cause**: CloudFront requires Lambda@Edge functions to be in "Active" state before they can be associated with distributions. Newly created Lambda functions start in "Pending" state and take a few seconds to become "Active".
+
+**Solution**: Implement a wait mechanism to ensure the Lambda function is active before proceeding:
+```javascript
+/**
+ * Wait for Lambda function to become active
+ */
+const waitForFunctionActive = async (functionName, maxWaitTime = 60000) => {
+    const startTime = Date.now();
+    
+    console.log(`Waiting for Lambda function ${functionName} to become active...`);
+    
+    while (Date.now() - startTime < maxWaitTime) {
+        try {
+            const result = await lambda.send(new GetFunctionCommand({
+                FunctionName: functionName
+            }));
+            
+            console.log(`Function state: ${result.Configuration.State}`);
+            
+            if (result.Configuration.State === 'Active') {
+                console.log(`Lambda function ${functionName} is now active`);
+                return true;
+            }
+            
+            // Wait 2 seconds before checking again
+            await new Promise(resolve => setTimeout(resolve, 2000));
+            
+        } catch (error) {
+            console.error('Error checking function state:', error);
+            throw error;
+        }
+    }
+    
+    throw new Error(`Lambda function ${functionName} did not become active within ${maxWaitTime}ms`);
+};
+
+// Usage in Lambda@Edge creation flow
+await waitForFunctionActive(functionName);
+```
+
+**Implementation Details:**
+- **Maximum wait time**: 60 seconds (typically functions become active within 5-10 seconds)
+- **Check interval**: 2 seconds to balance responsiveness and API rate limits
+- **Error handling**: Throws error if function doesn't become active within timeout
+- **Logging**: Comprehensive logs for debugging and monitoring
+
+**Key Takeaway**: Always wait for Lambda functions to reach "Active" state before associating them with CloudFront distributions.
+
+#### **7. Lambda@Edge IAM Role Trust Policy Requirements**
+
+**Problem**: `InvalidLambdaFunctionAssociation: The function execution role must be assumable with edgelambda.amazonaws.com as well as lambda.amazonaws.com principals`.
+
+**Root Cause**: Lambda@Edge functions require a special IAM role trust policy that allows **both** `lambda.amazonaws.com` AND `edgelambda.amazonaws.com` service principals to assume the role. Regular Lambda functions only require `lambda.amazonaws.com`.
+
+**Solution**: Update the IAM role trust policy to include both service principals:
+```typescript
+// ❌ Wrong - Only allows lambda.amazonaws.com
+const lambdaRole = new iam.Role(this, 'LambdaRole', {
+  assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com'),
+  managedPolicies: [
+    iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaBasicExecutionRole')
+  ]
+});
+
+// ✅ Correct - Allows both lambda.amazonaws.com and edgelambda.amazonaws.com
+const lambdaRole = new iam.Role(this, 'LambdaRole', {
+  assumedBy: new iam.CompositePrincipal(
+    new iam.ServicePrincipal('lambda.amazonaws.com'),
+    new iam.ServicePrincipal('edgelambda.amazonaws.com')
+  ),
+  managedPolicies: [
+    iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaBasicExecutionRole')
+  ]
+});
+```
+
+**Resulting Trust Policy JSON:**
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "Service": [
+          "lambda.amazonaws.com",
+          "edgelambda.amazonaws.com"
+        ]
+      },
+      "Action": "sts:AssumeRole"
+    }
+  ]
+}
+```
+
+**Required IAM Permissions for Lambda@Edge Functions:**
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogGroup",
+        "logs:CreateLogStream",
+        "logs:PutLogEvents"
+      ],
+      "Resource": "arn:aws:logs:*:*:*"
+    }
+  ]
+}
+```
+
+**Additional Permissions for Lambda@Edge Creation:**
+The Lambda function that creates Lambda@Edge functions needs these permissions:
+```json
+{
+  "Effect": "Allow",
+  "Action": [
+    "lambda:CreateFunction",
+    "lambda:PublishVersion",
+    "lambda:GetFunction",
+    "lambda:DeleteFunction",
+    "lambda:UpdateFunctionCode",
+    "lambda:UpdateFunctionConfiguration",
+    "lambda:TagResource",
+    "lambda:UntagResource",
+    "lambda:ListTags",
+    "lambda:EnableReplication*",
+    "iam:PassRole"
+  ],
+  "Resource": [
+    "arn:aws:lambda:us-east-1:*:function:*-multi-origin-func-*",
+    "arn:aws:iam::*:role/LambdaExecutionRole"
+  ]
+}
+```
+
+**Key Requirements:**
+- **Trust Policy**: Must include both `lambda.amazonaws.com` and `edgelambda.amazonaws.com`
+- **Region**: Lambda@Edge functions must be created in `us-east-1` region
+- **Permissions**: Standard Lambda execution permissions plus CloudWatch Logs
+- **PassRole**: The creating function needs `iam:PassRole` permission for the Lambda@Edge execution role
+
+**Verification Commands:**
+```bash
+# Check IAM role trust policy
+aws iam get-role --role-name YOUR_ROLE_NAME --query 'Role.AssumeRolePolicyDocument'
+
+# Verify Lambda@Edge function creation permissions
+aws iam simulate-principal-policy \
+  --policy-source-arn ROLE_ARN \
+  --action-names lambda:CreateFunction \
+  --resource-arns "arn:aws:lambda:us-east-1:*:function:*"
+```
+
+**Key Takeaway**: Lambda@Edge functions require dual service principal trust policies and must be created in us-east-1 region with proper IAM permissions.
+
+#### **8. Variable Naming Consistency**
+
+**Problem**: `ReferenceError: cloudfront is not defined` due to inconsistent variable naming.
+
+**Root Cause**: Code referenced `cloudfront.send()` but the client was instantiated as `cloudfrontClient`.
+
+**Solution**: Maintain consistent variable naming:
+```javascript
+// ✅ Consistent naming
+const cloudfrontClient = new CloudFrontClient();
+const result = await cloudfrontClient.send(new CreateDistributionCommand(params));
+```
+
+**Key Takeaway**: Use consistent and descriptive variable names throughout the codebase.
+
+#### **9. Regional Architecture Considerations**
+
+**Critical Regional Requirements:**
+- **Lambda@Edge Functions**: Must be created in `us-east-1` region
+- **ACM Certificates**: Must be in `us-east-1` for CloudFront usage
+- **CloudFront APIs**: Global service, accessed via `us-east-1` endpoint
+- **DynamoDB Tables**: Can be in primary region (`ap-northeast-1`)
+- **S3 Origins**: Can be in any region based on user selection
+
+**Implementation Pattern:**
+```javascript
+// Different clients for different regions
+const lambdaEdgeClient = new LambdaClient({ region: 'us-east-1' });        // Lambda@Edge
+const cloudfrontClient = new CloudFrontClient({ region: 'us-east-1' });    // CloudFront
+const dynamodbClient = new DynamoDBClient({ region: 'ap-northeast-1' });   // Primary region
+const s3Client = new S3Client({ region: originRegion });                   // Origin-specific
+```
+
+**Key Takeaway**: Understand and respect AWS service regional requirements, especially for CloudFront and Lambda@Edge.
+
+### **Development Best Practices**
+
+#### **1. Incremental Development and Testing**
+- Implement and test each component individually
+- Use comprehensive logging for debugging complex multi-service interactions
+- Test error scenarios and edge cases thoroughly
+
+#### **2. Error Handling Patterns**
+```javascript
+try {
+    const result = await awsService.send(command);
+    return { success: true, data: result };
+} catch (error) {
+    console.error('Service Error:', error);
+    
+    // Handle specific AWS service errors
+    if (error.name === 'SpecificErrorType') {
+        return { success: false, error: 'User-friendly message' };
+    }
+    
+    return { success: false, error: 'Generic error message', details: error.message };
+}
+```
+
+#### **3. Environment Configuration Management**
+- Use template-based configuration for frontend applications
+- Separate environment variables for different deployment stages
+- Validate environment variables at application startup
+
+#### **4. Dependency Management**
+- Maintain consistent package versions across all Lambda functions
+- Use CDK bundling to ensure all dependencies are included
+- Document required packages in deployment scripts
+
+### **Debugging Strategies**
+
+#### **1. CloudWatch Logs Analysis**
+- Use structured logging with consistent formats
+- Include request IDs for tracing multi-step operations
+- Log both successful operations and error conditions
+
+#### **2. AWS CLI Verification**
+```bash
+# Verify Lambda@Edge functions
+aws lambda list-functions --region us-east-1 --query 'Functions[?contains(FunctionName, `multi-origin`)].{Name:FunctionName,Runtime:Runtime}'
+
+# Check CloudFront distributions
+aws cloudfront list-distributions --query 'DistributionList.Items[*].{Id:Id,DomainName:DomainName,Status:Status}'
+
+# Validate IAM permissions
+aws iam simulate-principal-policy --policy-source-arn ROLE_ARN --action-names lambda:CreateFunction --resource-arns LAMBDA_ARN
+```
+
+#### **3. Frontend Debugging**
+- Use browser developer tools to inspect API requests and responses
+- Validate environment variable loading in browser console
+- Test CORS configuration with different origins
+
+### **Performance Considerations**
+
+#### **1. Lambda Function Optimization**
+- Use appropriate memory allocation for Lambda@Edge functions (128MB minimum)
+- Minimize cold start times by keeping function code lightweight
+- Cache frequently accessed data in function memory
+
+#### **2. CloudFront Configuration**
+- Use appropriate cache policies for different content types
+- Configure proper TTL values for Lambda@Edge responses
+- Monitor CloudFront metrics for performance optimization
+
+### **Security Best Practices**
+
+#### **1. IAM Principle of Least Privilege**
+- Grant only necessary permissions for each Lambda function
+- Use resource-specific ARNs instead of wildcards where possible
+- Regularly audit and review IAM policies
+
+#### **2. Lambda@Edge Security**
+- Validate all input parameters in Lambda@Edge functions
+- Use secure coding practices for origin selection logic
+- Implement proper error handling to avoid information disclosure
+
+### **Monitoring and Maintenance**
+
+#### **1. CloudWatch Metrics**
+- Monitor Lambda@Edge function execution metrics
+- Set up alarms for error rates and execution duration
+- Track CloudFront distribution performance metrics
+
+#### **2. Automated Testing**
+- Implement unit tests for Lambda@Edge routing logic
+- Create integration tests for multi-origin functionality
+- Use automated deployment pipelines with proper testing stages
+
+### **Future Enhancements**
+
+#### **1. Advanced Routing Logic**
+- Implement A/B testing capabilities in Lambda@Edge functions
+- Add support for custom routing rules based on request headers
+- Integrate with AWS Global Accelerator for improved performance
+
+#### **2. Management Interface Improvements**
+- Add real-time monitoring dashboard for multi-origin distributions
+- Implement bulk operations for managing multiple distributions
+- Create templates for common multi-origin configurations
+
+### **Conclusion**
+
+The multi-origin Lambda@Edge implementation demonstrates the complexity of integrating multiple AWS services while maintaining proper error handling, security, and performance. The key to success is understanding the specific requirements and limitations of each service, implementing proper error handling, and following AWS best practices throughout the development process.
+
+These lessons learned provide a foundation for future enhancements and similar implementations, helping developers avoid common pitfalls and build robust, scalable solutions.
+
+## Lambda@Edge CloudFront Trigger Visibility
+
+### **Critical Discovery: Console Navigation for Lambda@Edge Triggers**
+
+**Important**: CloudFront triggers for Lambda@Edge functions appear on **versioned functions** (`:1`, `:2`, etc.), **NOT** on the `$LATEST` version in the AWS Lambda console.
+
+#### **How to View CloudFront Triggers**
+
+1. **Navigate to AWS Lambda Console** → us-east-1 region
+2. **Find your Lambda@Edge function** (e.g., `demo49-multi-origin-func-2d0c6d6d`)
+3. **Click the version dropdown** (defaults to `$LATEST`)
+4. **Select the specific version** (`:1`, `:2`, etc.)
+5. **Check Configuration → Triggers** on the versioned function
+
+#### **Why This Happens**
+
+- **CloudFront Requirement**: CloudFront only associates with versioned Lambda functions
+- **Console Default**: AWS Lambda console defaults to showing `$LATEST` version
+- **Trigger Location**: CloudFront triggers appear only on the specific version used by CloudFront
+
+### **Required IAM Roles and Permissions**
+
+#### **1. Lambda@Edge Execution Role (Minimum Required)**
+
+**Trust Policy** - Must include BOTH service principals:
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "Service": [
+          "lambda.amazonaws.com",
+          "edgelambda.amazonaws.com"
+        ]
+      },
+      "Action": "sts:AssumeRole"
+    }
+  ]
+}
+```
+
+**Permissions Policy** - Minimum required permissions:
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogGroup",
+        "logs:CreateLogStream",
+        "logs:PutLogEvents"
+      ],
+      "Resource": "arn:aws:logs:*:*:*"
+    }
+  ]
+}
+```
+
+#### **2. Lambda Function Creation Role (For Creating Lambda@Edge Functions)**
+
+**Required Actions**:
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "lambda:CreateFunction",
+        "lambda:PublishVersion",
+        "lambda:GetFunction",
+        "lambda:DeleteFunction",
+        "lambda:AddPermission",
+        "lambda:RemovePermission",
+        "lambda:GetPolicy",
+        "iam:PassRole"
+      ],
+      "Resource": [
+        "arn:aws:lambda:us-east-1:*:function:*-multi-origin-func-*",
+        "arn:aws:iam::*:role/LambdaExecutionRole"
+      ]
+    }
+  ]
+}
+```
+
+#### **3. Status Monitor Role (For Managing Lambda@Edge Permissions)**
+
+**Required Actions**:
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "lambda:AddPermission",
+        "lambda:RemovePermission",
+        "lambda:GetPolicy",
+        "cloudfront:GetDistribution",
+        "cloudfront:UpdateDistribution"
+      ],
+      "Resource": [
+        "arn:aws:lambda:us-east-1:*:function:*-multi-origin-func-*",
+        "*"
+      ]
+    }
+  ]
+}
+```
+
+### **CloudFront Invoke Permission Requirements**
+
+#### **Automatic Permission Addition**
+
+The system automatically adds this permission to each Lambda@Edge function:
+
+```json
+{
+  "Sid": "cloudfront-invoke-timestamp",
+  "Effect": "Allow",
+  "Principal": {
+    "Service": "edgelambda.amazonaws.com"
+  },
+  "Action": "lambda:InvokeFunction",
+  "Resource": "arn:aws:lambda:us-east-1:ACCOUNT:function:FUNCTION_NAME"
+}
+```
+
+#### **Manual Permission Addition (If Needed)**
+
+```bash
+# Add CloudFront invoke permission to Lambda@Edge function
+aws lambda add-permission \
+  --function-name YOUR_LAMBDA_EDGE_FUNCTION \
+  --statement-id cloudfront-invoke-manual \
+  --action lambda:InvokeFunction \
+  --principal edgelambda.amazonaws.com \
+  --region us-east-1
+```
+
+### **Lambda@Edge Function Requirements**
+
+#### **Critical Requirements**
+
+1. **Region**: Must be created in `us-east-1` region
+2. **Versioned ARN**: Must use versioned ARN (`:1`, `:2`) for CloudFront association
+3. **Active State**: Function must be in "Active" state before CloudFront association
+4. **Invoke Permission**: Must have `edgelambda.amazonaws.com` invoke permission
+5. **Execution Role**: Must have dual service principal trust policy
+
+#### **Function Creation Parameters**
+
+```javascript
+const lambdaParams = {
+  FunctionName: functionName,
+  Runtime: 'nodejs18.x',
+  Role: 'arn:aws:iam::ACCOUNT:role/LambdaEdgeExecutionRole',
+  Handler: 'index.handler',
+  Code: { ZipFile: zipBuffer },
+  Description: 'Lambda@Edge function for multi-origin routing',
+  Timeout: 5,
+  MemorySize: 128,
+  Publish: true // REQUIRED: Creates versioned ARN for CloudFront
+};
+```
+
+### **Troubleshooting CloudFront Triggers**
+
+#### **Common Issues**
+
+1. **Trigger not visible in console**:
+   - ✅ Check versioned function (`:1`) instead of `$LATEST`
+   - ✅ Verify CloudFront invoke permission exists
+   - ✅ Confirm function is in "Active" state
+
+2. **Permission errors**:
+   - ✅ Verify execution role has dual service principals
+   - ✅ Check `edgelambda.amazonaws.com` invoke permission
+   - ✅ Ensure function creation role has `lambda:AddPermission`
+
+3. **Association errors**:
+   - ✅ Use versioned ARN (`:1`) not unversioned ARN
+   - ✅ Wait for function to reach "Active" state
+   - ✅ Verify function is in us-east-1 region
+
+#### **Verification Commands**
+
+```bash
+# Check Lambda@Edge function permissions
+aws lambda get-policy \
+  --function-name YOUR_FUNCTION_NAME \
+  --region us-east-1
+
+# Verify function state
+aws lambda get-function \
+  --function-name YOUR_FUNCTION_NAME \
+  --region us-east-1 \
+  --query 'Configuration.State'
+
+# Check CloudFront distribution associations
+aws cloudfront get-distribution \
+  --id YOUR_DISTRIBUTION_ID \
+  --query 'Distribution.DistributionConfig.DefaultCacheBehavior.LambdaFunctionAssociations'
+```
+
+### **Best Practices**
+
+1. **Always check versioned functions** for CloudFront triggers
+2. **Use dual service principal trust policies** for Lambda@Edge execution roles
+3. **Wait for "Active" state** before associating with CloudFront
+4. **Add invoke permissions** immediately after function creation
+5. **Monitor CloudWatch Logs** in multiple regions for Lambda@Edge execution
+6. **Use consistent naming** for Lambda@Edge functions to aid debugging
+
+
 ## API Endpoints
 
 The CloudFront Manager API provides the following endpoints:
@@ -752,22 +1734,33 @@ The S3 Origins management feature provides a user-friendly interface for managin
 
 The CloudFront Manager implements a comprehensive Origin Access Control (OAC) system that automatically manages secure access between CloudFront distributions and S3 origins. This ensures proper security and access control for your CDN infrastructure.
 
+**Note**: For multi-origin distributions using Lambda@Edge, the system uses Origin Access Identity (OAI) instead of OAC due to Lambda@Edge compatibility requirements.
+
 ### Overview
 
-Origin Access Control (OAC) is AWS's recommended method for securing access to S3 origins from CloudFront distributions. The CloudFront Manager automatically creates, manages, and deletes OACs as part of the S3 origins lifecycle.
+Origin Access Control (OAC) is AWS's recommended method for securing access to S3 origins from CloudFront distributions for single-origin distributions. For multi-origin distributions with Lambda@Edge, Origin Access Identity (OAI) is used to ensure compatibility.
 
-### Architecture: One OAC per S3 Origin
+### Architecture: Dual Authentication System
 
-The system implements a **one-OAC-per-S3-origin** approach, providing:
+The system implements different authentication methods based on distribution type:
 
+#### **Single-Origin Distributions: One OAC per S3 Origin**
 - **Granular Security Control**: Each S3 bucket has its own dedicated OAC
 - **Isolation**: Security issues are contained to specific bucket/OAC pairs
 - **Flexible Configuration**: Different access policies per S3 bucket
 - **Clear Auditability**: Easy mapping between OACs and S3 buckets
 
-### Automatic OAC Lifecycle Management
+#### **Multi-Origin Distributions: Shared OAI for Lambda@Edge Compatibility**
+- **Lambda@Edge Compatible**: Uses OAI which is supported by Lambda@Edge functions
+- **Shared Authentication**: All origins in a multi-origin distribution use the same OAI
+- **Simplified Management**: Single OAI per multi-origin distribution
+- **Regional Routing**: Lambda@Edge functions route requests while maintaining secure access
 
-#### **1. OAC Creation (When S3 Origin is Created)**
+### Automatic Authentication Management
+
+#### **Single-Origin Distribution Flow**
+
+**1. OAC Creation (When S3 Origin is Created)**
 
 When you create a new S3 origin through the CloudFront Manager:
 
@@ -788,124 +1781,381 @@ When you create a new S3 origin through the CloudFront Manager:
 3. ✅ **S3 Bucket Policy**: Initial bucket policy is configured for CloudFront access
 4. ✅ **Distribution Tracking**: Empty array is initialized to track using distributions
 
-#### **2. OAC Association (When Distribution is Created)**
+#### **Multi-Origin Distribution Flow**
 
-When you create a CloudFront distribution using an S3 origin:
+**1. OAI Creation (When Multi-Origin Distribution is Created)**
 
-**What happens automatically:**
-1. ✅ **OAC Lookup**: System finds the OAC ID for the selected S3 origin
-2. ✅ **Distribution Configuration**: OAC ID is added to the CloudFront distribution config
-3. ✅ **ARN Registration**: Distribution ARN is added to the origin's tracking list
-4. ✅ **S3 Policy Update**: Bucket policy is updated to allow the new distribution
+When you create a multi-origin distribution with Lambda@Edge:
 
 ```javascript
-// Updated S3 bucket policy
+// Automatically created OAI configuration
+{
+  CallerReference: "distribution-name-oai-timestamp",
+  Comment: "OAI for multi-origin distribution: distribution-name"
+}
+```
+
+**What happens automatically:**
+1. ✅ **OAI Creation**: A single OAI is created for the entire multi-origin distribution
+2. ✅ **Shared Authentication**: All origins in the distribution use the same OAI
+3. ✅ **S3 Policy Updates**: All S3 buckets are updated with OAI-based policies
+4. ✅ **Lambda@Edge Compatibility**: OAI ensures Lambda@Edge functions work correctly
+
+**2. S3 Bucket Policy Configuration**
+
+For multi-origin distributions, each S3 bucket gets an OAI-based policy that supports multiple OAI principals:
+
+```json
 {
   "Version": "2012-10-17",
   "Statement": [
     {
-      "Sid": "AllowCloudFrontServicePrincipal",
+      "Sid": "AllowOriginAccessIdentities",
       "Effect": "Allow",
       "Principal": {
-        "Service": "cloudfront.amazonaws.com"
+        "AWS": [
+          "arn:aws:iam::cloudfront:user/CloudFront Origin Access Identity OAI-ID-1",
+          "arn:aws:iam::cloudfront:user/CloudFront Origin Access Identity OAI-ID-2"
+        ]
       },
       "Action": "s3:GetObject",
-      "Resource": "arn:aws:s3:::bucket-name/*",
-      "Condition": {
-        "StringEquals": {
-          "AWS:SourceArn": [
-            "arn:aws:cloudfront::account:distribution/DIST-ID-1",
-            "arn:aws:cloudfront::account:distribution/DIST-ID-2"
-          ]
-        }
-      }
+      "Resource": "arn:aws:s3:::bucket-name/*"
     }
   ]
 }
 ```
 
-#### **3. OAC Disassociation (When Distribution is Deleted)**
+**Key Features:**
+- **Multiple OAI Support**: S3 buckets can be accessed by multiple multi-origin distributions
+- **Policy Merging**: New OAI principals are added to existing policies instead of overwriting
+- **Mixed Authentication**: Supports both OAC (single-origin) and OAI (multi-origin) on the same bucket
+- **Automatic Deduplication**: Prevents duplicate OAI principals in policies
 
-When you delete a CloudFront distribution:
+**3. Lambda@Edge Function Configuration**
 
-**What happens automatically:**
-1. ✅ **ARN Removal**: Distribution ARN is removed from origin's tracking list
-2. ✅ **S3 Policy Update**: Bucket policy is updated to remove distribution access
-3. ✅ **Clean References**: All OAC references to the deleted distribution are cleaned up
+The generated Lambda@Edge functions use OAI authentication and include proper CloudFront integration:
 
-#### **4. OAC Deletion (When S3 Origin is Deleted)**
+```javascript
+const setRequestOrigin = (request, domainName) => {
+    request.origin.s3.authMethod = 'origin-access-identity';
+    request.origin.s3.domainName = domainName;
+    request.origin.s3.region = domainName.split('.')[2];
+    request.headers['host'] = [{ key: 'host', value: domainName }];
+};
+```
 
-When you delete an S3 origin:
+**CloudFront Integration Requirements:**
+- **Function Creation**: Lambda function created in us-east-1 region with `Publish: true`
+- **Versioned ARN**: CloudFront requires versioned Lambda function ARNs (e.g., `:1`, `:2`)
+- **CloudFront Association**: Function associated with distribution's default cache behavior
+- **Invoke Permission**: CloudFront granted permission to invoke the Lambda function
+- **Active State**: Function must be in "Active" state before CloudFront association
 
-**Safety checks:**
-- ❌ **Deletion Blocked**: If distributions are still using the origin
-- ✅ **Safe Deletion**: Only proceeds if no distributions are using the origin
+**Automatic Permission Configuration:**
+```javascript
+// System automatically adds this permission for each Lambda@Edge function
+{
+  "StatementId": "cloudfront-invoke-timestamp",
+  "Action": "lambda:InvokeFunction", 
+  "Principal": "edgelambda.amazonaws.com",
+  "Effect": "Allow"
+}
+```
 
-**What happens automatically:**
-1. ✅ **Usage Validation**: Checks if any distributions are still using the origin
-2. ✅ **OAC Deletion**: Deletes the dedicated OAC from CloudFront
-3. ✅ **S3 Cleanup**: Empties and deletes the S3 bucket
-4. ✅ **Record Cleanup**: Removes the origin record from DynamoDB
+This ensures the CloudFront trigger appears correctly in the AWS Lambda console and enables proper function invocation.
+
+### Authentication Strategy by Use Case
+
+The CloudFront Manager uses different authentication methods based on how origins are used:
+
+| Use Case | Authentication Method | When Applied | Reason |
+|----------|----------------------|--------------|---------|
+| **Individual Origin Creation** | OAC | Origins API creates OAC | Prepared for single-origin use (most common scenario) |
+| **Single-Origin Distribution** | OAC | Uses origin's existing OAC | AWS recommended, modern security |
+| **Multi-Origin Distribution** | OAI | Creates new OAI for distribution | Lambda@Edge compatibility requirement |
+
+### Authentication Method Selection
+
+The system automatically chooses the appropriate authentication method:
+
+| Distribution Type | Authentication Method | Reason |
+|------------------|----------------------|---------|
+| Single-Origin | OAC (Origin Access Control) | AWS recommended, modern security |
+| Multi-Origin with Lambda@Edge | OAI (Origin Access Identity) | Lambda@Edge compatibility requirement |
+
+### Multiple Multi-Origin Distributions Sharing Origins
+
+The system supports multiple multi-origin distributions using the same S3 origins through intelligent S3 bucket policy management.
+
+#### **How It Works:**
+
+1. **First Multi-Origin Distribution**:
+   ```json
+   {
+     "Principal": {
+       "AWS": "arn:aws:iam::cloudfront:user/CloudFront Origin Access Identity E1URK07W5SXT02"
+     }
+   }
+   ```
+
+2. **Second Multi-Origin Distribution (Same Origins)**:
+   ```json
+   {
+     "Principal": {
+       "AWS": [
+         "arn:aws:iam::cloudfront:user/CloudFront Origin Access Identity E1URK07W5SXT02",
+         "arn:aws:iam::cloudfront:user/CloudFront Origin Access Identity E2ABC123DEF456"
+       ]
+     }
+   }
+   ```
+
+3. **Mixed Authentication (OAC + Multiple OAI)**:
+   ```json
+   {
+     "Statement": [
+       {
+         "Sid": "AllowOriginAccessIdentities",
+         "Principal": {
+           "AWS": [
+             "arn:aws:iam::cloudfront:user/CloudFront Origin Access Identity E1URK07W5SXT02",
+             "arn:aws:iam::cloudfront:user/CloudFront Origin Access Identity E2ABC123DEF456"
+           ]
+         },
+         "Action": "s3:GetObject"
+       },
+       {
+         "Sid": "AllowCloudFrontServicePrincipal",
+         "Principal": {
+           "Service": "cloudfront.amazonaws.com"
+         },
+         "Action": "s3:GetObject",
+         "Condition": {
+           "StringEquals": {
+             "AWS:SourceArn": "arn:aws:cloudfront::account:distribution/SINGLE-ORIGIN-DIST-ID"
+           }
+         }
+       }
+     ]
+   }
+   ```
+
+#### **Policy Merging Process:**
+
+1. **Read Existing Policy**: System reads current S3 bucket policy
+2. **Extract OAI Principals**: Identifies existing OAI principals
+3. **Add New Principal**: Adds new OAI principal if not already present
+4. **Preserve Other Statements**: Maintains existing OAC and other policy statements
+5. **Update Policy**: Applies merged policy to S3 bucket
+
+#### **Benefits:**
+
+- **Shared Origins**: Multiple multi-origin distributions can use the same S3 origins
+- **No Access Loss**: Previous distributions maintain access when new ones are created
+- **Cost Efficiency**: Reuse existing S3 buckets across multiple distributions
+- **Flexible Architecture**: Mix single-origin (OAC) and multi-origin (OAI) distributions on same buckets
+- **Automatic Cleanup**: When distributions are deleted, OAI principals are automatically removed from S3 bucket policies
+
+### **OAI Cleanup on Distribution Deletion**
+
+When a multi-origin distribution is deleted, the system automatically cleans up the associated resources:
+
+#### **Cleanup Process:**
+
+1. **Distribution Type Detection**: System identifies if the distribution is multi-origin with OAI
+2. **Origin Identification**: Retrieves all origins used by the distribution
+3. **Policy Reading**: Reads existing S3 bucket policies for each origin
+4. **Principal Removal**: Removes the specific OAI principal from the policy
+5. **Policy Update**: Updates the bucket policy with remaining principals
+6. **Lambda@Edge Cleanup**: Deletes the associated Lambda@Edge function and its DynamoDB record
+7. **Graceful Handling**: Continues deletion even if cleanup fails
+
+#### **Lambda@Edge Function Cleanup:**
+
+When deleting a multi-origin distribution, the system automatically:
+- **Identifies Lambda@Edge Function**: Retrieves the function ID from the distribution record
+- **Deletes Lambda Function**: Removes the Lambda@Edge function from AWS Lambda (us-east-1 region)
+- **Cleans Database Record**: Removes the function record from the Lambda@Edge functions table
+- **Handles Missing Functions**: Gracefully handles cases where the function was already deleted
+- **Error Resilience**: Continues distribution deletion even if Lambda cleanup fails
+
+#### **Example Cleanup Scenario:**
+
+**Before Deletion (Multiple OAI Principals):**
+```json
+{
+  "Principal": {
+    "AWS": [
+      "arn:aws:iam::cloudfront:user/CloudFront Origin Access Identity E1URK07W5SXT02",
+      "arn:aws:iam::cloudfront:user/CloudFront Origin Access Identity E2ABC123DEF456"
+    ]
+  }
+}
+```
+
+**After Deletion (Remaining OAI Principal):**
+```json
+{
+  "Principal": {
+    "AWS": "arn:aws:iam::cloudfront:user/CloudFront Origin Access Identity E1URK07W5SXT02"
+  }
+}
+```
+
+**Complete Cleanup (No OAI Principals Left):**
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": []
+}
+```
 
 ### Security Benefits
 
-#### **1. Principle of Least Privilege**
-- Each S3 bucket only allows access from specific CloudFront distributions
-- No blanket permissions across multiple buckets
-- Granular control over which distributions can access which origins
+#### **Single-Origin Distributions (OAC)**
+- **Modern Security**: Uses AWS's latest security recommendations
+- **Enhanced Features**: Supports all AWS regions and HTTP methods
+- **Better Performance**: Optimized for modern CloudFront features
 
-#### **2. Automatic Policy Management**
-- S3 bucket policies are automatically updated when distributions are added/removed
-- No manual policy management required
-- Consistent security configuration across all origins
+#### **Multi-Origin Distributions (OAI)**
+- **Lambda@Edge Compatibility**: Ensures Lambda@Edge functions work correctly
+- **Proven Security**: Established security model with broad compatibility
+- **Shared Access**: Simplified management with single OAI per distribution
 
-#### **3. Access Isolation**
-- Security issues are contained to specific bucket/distribution pairs
-- Easy to revoke access for specific distributions
-- Clear audit trail of which distributions access which buckets
+### Implementation Details
+
+#### **OAC Implementation (Single-Origin)**
+```typescript
+// CDK implementation for OAC
+const oac = new cloudfront.OriginAccessControl(this, 'OriginAccessControl', {
+  description: `OAC for S3 bucket ${bucketName}`,
+  originAccessControlOriginType: cloudfront.OriginAccessControlOriginType.S3,
+  signingBehavior: cloudfront.SigningBehavior.ALWAYS,
+  signingProtocol: cloudfront.SigningProtocol.SIGV4
+});
+```
+
+#### **OAI Implementation (Multi-Origin)**
+```javascript
+// Runtime OAI creation for multi-origin distributions
+const oaiParams = {
+  OriginAccessIdentityConfig: {
+    CallerReference: `${distributionName}-oai-${Date.now()}`,
+    Comment: `OAI for multi-origin distribution: ${distributionName}`
+  }
+};
+
+const oaiResult = await cloudfrontClient.send(new CreateOriginAccessIdentityCommand(oaiParams));
+```
+
+#### **Lambda@Edge Implementation (Multi-Origin)**
+```javascript
+// Runtime Lambda@Edge creation for multi-origin distributions
+const lambdaParams = {
+  FunctionName: `${distributionName}-multi-origin-func-${functionId}`,
+  Runtime: 'nodejs18.x',
+  Role: process.env.LAMBDA_EDGE_EXECUTION_ROLE_ARN,
+  Handler: 'index.handler',
+  Code: { ZipFile: zipBuffer },
+  Description: 'Lambda@Edge function for multi-origin routing',
+  Timeout: 5,
+  MemorySize: 128,
+  Publish: true // Required for Lambda@Edge association
+};
+
+const lambdaResult = await lambdaClient.send(new CreateFunctionCommand(lambdaParams));
+
+// Add CloudFront invoke permission
+await lambdaClient.send(new AddPermissionCommand({
+  FunctionName: functionName,
+  StatementId: `cloudfront-invoke-${Date.now()}`,
+  Action: 'lambda:InvokeFunction',
+  Principal: 'edgelambda.amazonaws.com'
+}));
+```
+
+**Lambda@Edge Permission Requirements:**
+- **Function Creation**: Must be created in us-east-1 region
+- **Published Version**: Must use `Publish: true` for versioned ARN
+- **CloudFront Permission**: Must grant `edgelambda.amazonaws.com` invoke permission
+- **Active State**: Function must be active before CloudFront association
+- **Execution Role**: Must have dual service principal trust policy
+
+**IAM Trust Policy for Lambda@Edge:**
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "Service": [
+          "lambda.amazonaws.com",
+          "edgelambda.amazonaws.com"
+        ]
+      },
+      "Action": "sts:AssumeRole"
+    }
+  ]
+}
+```
 
 ### Monitoring and Troubleshooting
 
-#### **Viewing OAC Information**
+#### **Viewing Authentication Information**
 
 1. **In CloudFront Manager UI**:
-   - Origin details show associated OAC ID
-   - Distribution list shows which origins are being used
+   - Single-origin: Origin details show associated OAC ID
+   - Multi-origin: Distribution details show shared OAI ID
 
 2. **In AWS Console**:
-   - CloudFront → Origin Access Control → View all OACs
+   - CloudFront → Origin Access Control → View OACs (single-origin)
+   - CloudFront → Origin Access Identities → View OAIs (multi-origin)
    - S3 → Bucket → Permissions → Bucket Policy
 
 #### **Common Issues and Solutions**
 
-1. **"Cannot delete origin - still in use"**:
+1. **"Access Denied" errors in single-origin distributions**:
    ```
-   Issue: Trying to delete an origin that has active distributions
-   Solution: Delete all distributions using the origin first
-   ```
-
-2. **"Access Denied" errors**:
-   ```
-   Issue: S3 bucket policy not properly configured
+   Issue: S3 bucket policy not properly configured for OAC
    Solution: Check that distribution ARN is in bucket policy
    ```
 
-3. **OAC not found errors**:
+2. **"Access Denied" errors in multi-origin distributions**:
    ```
-   Issue: OAC was manually deleted outside of CloudFront Manager
-   Solution: Recreate the origin to generate a new OAC
+   Issue: S3 bucket policy not properly configured for OAI
+   Solution: Verify OAI canonical user ID is in bucket policy
+   ```
+
+3. **Lambda@Edge authentication errors**:
+   ```
+   Issue: Trying to use OAC with Lambda@Edge
+   Solution: System automatically uses OAI for Lambda@Edge compatibility
+   ```
+
+4. **CloudFront trigger not visible in Lambda console**:
+   ```
+   Issue: Looking at $LATEST version instead of versioned function
+   Solution: Check versioned function (:1, :2) in Lambda console, not $LATEST
+   Additional: Ensure edgelambda.amazonaws.com invoke permission exists
+   ```
+
+5. **Lambda@Edge function association errors**:
+   ```
+   Issue: Function not in Active state or missing versioned ARN
+   Solution: System waits for Active state and ensures versioned ARN format
    ```
 
 #### **Manual Verification**
 
-You can verify OAC configuration using AWS CLI:
+You can verify authentication configuration using AWS CLI:
 
 ```bash
-# List all OACs
+# List OACs (single-origin)
 aws cloudfront list-origin-access-controls
 
-# Get specific OAC details
-aws cloudfront get-origin-access-control --id OAC-ID
+# List OAIs (multi-origin)
+aws cloudfront list-origin-access-identities
 
 # Check S3 bucket policy
 aws s3api get-bucket-policy --bucket bucket-name
@@ -913,17 +2163,19 @@ aws s3api get-bucket-policy --bucket bucket-name
 
 ### Best Practices
 
-1. **Use CloudFront Manager**: Always create/delete origins through the CloudFront Manager to ensure proper OAC management
+1. **Use CloudFront Manager**: Always create distributions through the CloudFront Manager to ensure proper authentication setup
 
-2. **Don't Manual OAC Changes**: Avoid manually modifying OACs or S3 bucket policies outside of the system
+2. **Don't Manual Changes**: Avoid manually modifying OACs/OAIs or S3 bucket policies outside of the system
 
 3. **Monitor Usage**: Regularly review which distributions are using which origins
 
 4. **Clean Up**: Delete unused distributions before attempting to delete origins
 
-5. **Backup Policies**: Consider backing up S3 bucket policies before making changes
+5. **Understand the Difference**: 
+   - Single-origin distributions use OAC (modern, recommended)
+   - Multi-origin distributions use OAI (Lambda@Edge compatible)
 
-This automated OAC management ensures that your CloudFront distributions have secure, properly configured access to S3 origins without requiring manual policy management.
+This dual authentication system ensures that your CloudFront distributions have secure, properly configured access to S3 origins while maintaining compatibility with Lambda@Edge functions for multi-origin routing.
 
 ## CORS Handling
 
@@ -1258,6 +2510,46 @@ The application currently uses **build-time configuration** where the `deploy.sh
 - Store configuration parameters in AWS Systems Manager Parameter Store
 - Create API endpoint to retrieve parameters securely
 - Benefits: Centralized config management, version history, fine-grained access control
+
+## Key Takeaways for Lambda@Edge Implementation
+
+### **Most Important Discovery**
+**CloudFront triggers appear on versioned Lambda functions (`:1`, `:2`), NOT on `$LATEST`**
+- Always check the specific version in AWS Lambda console
+- This was the root cause of "missing" CloudFront triggers
+
+### **Essential Requirements for Lambda@Edge**
+1. **Region**: Must be created in `us-east-1` region
+2. **Versioned ARN**: Use `Publish: true` when creating functions
+3. **Dual Trust Policy**: Both `lambda.amazonaws.com` and `edgelambda.amazonaws.com` principals
+4. **CloudFront Permission**: `edgelambda.amazonaws.com` invoke permission required
+5. **Active State**: Wait for function to be "Active" before CloudFront association
+
+### **Minimum IAM Permissions**
+```json
+{
+  "Effect": "Allow",
+  "Action": [
+    "lambda:CreateFunction",
+    "lambda:PublishVersion", 
+    "lambda:AddPermission",
+    "lambda:GetFunction",
+    "iam:PassRole"
+  ],
+  "Resource": [
+    "arn:aws:lambda:us-east-1:*:function:*-multi-origin-func-*",
+    "arn:aws:iam::*:role/LambdaExecutionRole"
+  ]
+}
+```
+
+### **Troubleshooting Checklist**
+- ✅ Check versioned function (`:1`) not `$LATEST` in Lambda console
+- ✅ Verify function is in us-east-1 region
+- ✅ Confirm function state is "Active"
+- ✅ Check `edgelambda.amazonaws.com` invoke permission exists
+- ✅ Validate dual service principal trust policy
+- ✅ Use versioned ARN in CloudFront association
 
 ## LICENSE
 
