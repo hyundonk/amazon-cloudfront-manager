@@ -8,6 +8,7 @@ import { Construct } from 'constructs';
 export interface CfManagerStatusMonitorStackProps extends cdk.StackProps {
   distributionsTableName: string;
   historyTableName: string;
+  runtime: 'python' | 'nodejs';
 }
 
 export class CfManagerStatusMonitorStack extends cdk.Stack {
@@ -74,33 +75,80 @@ export class CfManagerStatusMonitorStack extends cdk.Stack {
       resources: [dynamoDbResources[0]],  // Only need scan on distributions table
     }));
 
+    // Create Lambda layer for Python common utilities (only if using Python runtime)
+    let commonUtilsLayer: lambda.LayerVersion | undefined;
+    if (props.runtime === 'python') {
+      commonUtilsLayer = new lambda.LayerVersion(this, 'CommonUtilsLayer', {
+        code: lambda.Code.fromAsset('functions-python/layers/common-utils'),
+        compatibleRuntimes: [lambda.Runtime.PYTHON_3_9],
+        description: 'Common utilities for CloudFront Manager Python functions',
+      });
+    }
+
+    // Helper function to create Lambda functions based on runtime
+    const createLambdaFunction = (
+      id: string,
+      functionPath: string,
+      description: string,
+      role: iam.Role,
+      environment: { [key: string]: string },
+      timeout: cdk.Duration = cdk.Duration.seconds(30),
+      memorySize: number = 256
+    ): lambda.Function => {
+      if (props.runtime === 'python') {
+        return new lambda.Function(this, id, {
+          runtime: lambda.Runtime.PYTHON_3_9,
+          handler: 'lambda_function.lambda_handler',
+          code: lambda.Code.fromAsset(`functions-python/${functionPath}`),
+          environment,
+          role,
+          timeout,
+          memorySize,
+          description: `${description} (Python)`,
+          layers: commonUtilsLayer ? [commonUtilsLayer] : undefined,
+        });
+      } else {
+        // Node.js runtime
+        return new lambda.Function(this, id, {
+          runtime: lambda.Runtime.NODEJS_18_X,
+          handler: 'index.handler',
+          code: lambda.Code.fromAsset(`functions/${functionPath}`),
+          environment,
+          role,
+          timeout,
+          memorySize,
+          description: `${description} (Node.js)`,
+        });
+      }
+    };
+
     // Create Lambda function to check and update distribution statuses
-    const updateStatusFunction = new lambda.Function(this, 'UpdateDistributionStatusFunction', {
-      runtime: lambda.Runtime.NODEJS_18_X,
-      handler: 'index.handler',
-      code: lambda.Code.fromAsset('functions/distributions/check-status'),
-      timeout: cdk.Duration.seconds(60),
-      memorySize: 256,
-      role: updateStatusRole,
-      environment: {
+    const updateStatusFunction = createLambdaFunction(
+      'UpdateDistributionStatusFunction',
+      'distributions/check-status',
+      'Checks and updates CloudFront distribution status',
+      updateStatusRole,
+      {
         DISTRIBUTIONS_TABLE: props.distributionsTableName,
         HISTORY_TABLE: props.historyTableName,
       },
-    });
+      cdk.Duration.seconds(60),
+      256
+    );
 
     // Create Lambda function to find pending distributions
-    const findPendingFunction = new lambda.Function(this, 'FindPendingDistributionsFunction', {
-      runtime: lambda.Runtime.NODEJS_18_X,
-      handler: 'index.handler',
-      code: lambda.Code.fromAsset('functions/distributions/find-pending'),
-      timeout: cdk.Duration.seconds(30),
-      memorySize: 256,
-      role: findPendingRole,
-      environment: {
+    const findPendingFunction = createLambdaFunction(
+      'FindPendingDistributionsFunction',
+      'distributions/find-pending',
+      'Finds pending CloudFront distributions for status updates',
+      findPendingRole,
+      {
         DISTRIBUTIONS_TABLE: props.distributionsTableName,
         UPDATE_STATUS_FUNCTION_NAME: updateStatusFunction.functionName,
       },
-    });
+      cdk.Duration.seconds(30),
+      256
+    );
 
     // Grant permission for find pending function to invoke update status function
     updateStatusFunction.grantInvoke(findPendingFunction);

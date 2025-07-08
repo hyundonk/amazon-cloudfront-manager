@@ -19,6 +19,7 @@ interface CfManagerBackendStackProps extends cdk.StackProps {
   originsTable: dynamodb.Table;
   lambdaEdgeFunctionsTable: dynamodb.Table;
   customCachePolicy: cloudfront.CachePolicy;
+  runtime: 'python' | 'nodejs';
 }
 
 export class CfManagerBackendStack extends cdk.Stack {
@@ -174,70 +175,87 @@ export class CfManagerBackendStack extends cdk.Stack {
     props.originsTable.grantReadWriteData(lambdaRole);  // Add permissions for Origins table
     props.lambdaEdgeFunctionsTable.grantReadWriteData(lambdaRole);  // Add permissions for Lambda@Edge Functions table
 
-    // Define Step Function Lambda functions first
-    const checkDeploymentStatus = new lambda.Function(this, 'CheckDeploymentStatusFunction', {
-      runtime: lambda.Runtime.NODEJS_18_X,
-      handler: 'index.handler',
-      code: lambda.Code.fromAsset('functions/common/checkDeploymentStatus', {
-        bundling: {
-          image: lambda.Runtime.NODEJS_18_X.bundlingImage,
-          command: [
-            'bash', '-c', [
-              'npm install',
-              'npm install @aws-sdk/client-dynamodb @aws-sdk/lib-dynamodb @aws-sdk/client-cloudfront',
-              'cp -r /asset-input/* /asset-output/',
-              'cp -r node_modules /asset-output/'
-            ].join(' && ')
-          ],
-          local: {
-            tryBundle(outputDir: string) {
-              require('child_process').execSync(
-                `cd functions/common/checkDeploymentStatus && npm install && npm install @aws-sdk/client-dynamodb @aws-sdk/lib-dynamodb @aws-sdk/client-cloudfront && mkdir -p ${outputDir} && cp -r * ${outputDir} && cp -r node_modules ${outputDir}`,
-                { stdio: 'inherit' }
-              );
-              return true;
-            }
-          }
-        }
-      }),
-      environment: lambdaEnv,
-      role: lambdaRole,
-      timeout: cdk.Duration.seconds(30),
-      memorySize: 256,
-      description: 'Checks the deployment status of a CloudFront distribution'
-    });
+    // Create Lambda layer for Python common utilities (only if using Python runtime)
+    let commonUtilsLayer: lambda.LayerVersion | undefined;
+    if (props.runtime === 'python') {
+      commonUtilsLayer = new lambda.LayerVersion(this, 'CommonUtilsLayer', {
+        code: lambda.Code.fromAsset('functions-python/layers/common-utils'),
+        compatibleRuntimes: [lambda.Runtime.PYTHON_3_9],
+        description: 'Common utilities for CloudFront Manager Python functions',
+      });
+    }
 
-    const updateDistributionStatus = new lambda.Function(this, 'UpdateDistributionStatusFunction', {
-      runtime: lambda.Runtime.NODEJS_18_X,
-      handler: 'index.handler',
-      code: lambda.Code.fromAsset('functions/common/updateDistributionStatus', {
-        bundling: {
-          image: lambda.Runtime.NODEJS_18_X.bundlingImage,
-          command: [
-            'bash', '-c', [
-              'npm install',
-              'npm install @aws-sdk/client-dynamodb @aws-sdk/lib-dynamodb',
-              'cp -r /asset-input/* /asset-output/',
-              'cp -r node_modules /asset-output/'
-            ].join(' && ')
-          ],
-          local: {
-            tryBundle(outputDir: string) {
-              require('child_process').execSync(
-                `cd functions/common/updateDistributionStatus && npm install && npm install @aws-sdk/client-dynamodb @aws-sdk/lib-dynamodb && mkdir -p ${outputDir} && cp -r * ${outputDir} && cp -r node_modules ${outputDir}`,
-                { stdio: 'inherit' }
-              );
-              return true;
+    // Helper function to create Lambda functions based on runtime
+    const createLambdaFunction = (
+      id: string,
+      functionPath: string,
+      description: string,
+      timeout: cdk.Duration = cdk.Duration.seconds(30),
+      memorySize: number = 256,
+      additionalEnv: { [key: string]: string } = {}
+    ): lambda.Function => {
+      const environment = { ...lambdaEnv, ...additionalEnv };
+
+      if (props.runtime === 'python') {
+        return new lambda.Function(this, id, {
+          runtime: lambda.Runtime.PYTHON_3_9,
+          handler: 'lambda_function.lambda_handler',
+          code: lambda.Code.fromAsset(`functions-python/${functionPath}`),
+          environment,
+          role: lambdaRole,
+          timeout,
+          memorySize,
+          description: `${description} (Python)`,
+          layers: commonUtilsLayer ? [commonUtilsLayer] : undefined,
+        });
+      } else {
+        // Node.js runtime with bundling
+        return new lambda.Function(this, id, {
+          runtime: lambda.Runtime.NODEJS_18_X,
+          handler: 'index.handler',
+          code: lambda.Code.fromAsset(`functions/${functionPath}`, {
+            bundling: {
+              image: lambda.Runtime.NODEJS_18_X.bundlingImage,
+              command: [
+                'bash', '-c', [
+                  'npm install',
+                  'npm install @aws-sdk/client-dynamodb @aws-sdk/lib-dynamodb @aws-sdk/client-cloudfront @aws-sdk/client-s3 @aws-sdk/client-lambda @aws-sdk/client-sfn @aws-sdk/client-acm jszip uuid',
+                  'cp -r /asset-input/* /asset-output/',
+                  'cp -r node_modules /asset-output/'
+                ].join(' && ')
+              ],
+              local: {
+                tryBundle(outputDir: string) {
+                  require('child_process').execSync(
+                    `cd functions/${functionPath} && npm install && npm install @aws-sdk/client-dynamodb @aws-sdk/lib-dynamodb @aws-sdk/client-cloudfront @aws-sdk/client-s3 @aws-sdk/client-lambda @aws-sdk/client-sfn @aws-sdk/client-acm jszip uuid && mkdir -p ${outputDir} && cp -r * ${outputDir} && cp -r node_modules ${outputDir}`,
+                    { stdio: 'inherit' }
+                  );
+                  return true;
+                }
+              }
             }
-          }
-        }
-      }),
-      environment: lambdaEnv,
-      role: lambdaRole,
-      timeout: cdk.Duration.seconds(30),
-      memorySize: 256,
-      description: 'Updates the status of a CloudFront distribution in DynamoDB'
-    });
+          }),
+          environment,
+          role: lambdaRole,
+          timeout,
+          memorySize,
+          description: `${description} (Node.js)`,
+        });
+      }
+    };
+
+    // Define Step Function Lambda functions first
+    const checkDeploymentStatus = createLambdaFunction(
+      'CheckDeploymentStatusFunction',
+      'common/checkDeploymentStatus',
+      'Checks the deployment status of a CloudFront distribution'
+    );
+
+    const updateDistributionStatus = createLambdaFunction(
+      'UpdateDistributionStatusFunction', 
+      'common/updateDistributionStatus',
+      'Updates the status of a CloudFront distribution in DynamoDB'
+    );
 
     // Define Step Function
     const checkStatus = new tasks.LambdaInvoke(this, 'Check Deployment Status', {
@@ -280,551 +298,246 @@ export class CfManagerBackendStack extends cdk.Stack {
     });
 
     // Create Lambda functions for distributions
-    const listDistributionsFunction = new lambda.Function(this, 'ListDistributionsFunction', {
-      runtime: lambda.Runtime.NODEJS_18_X,
-      handler: 'index.handler',
-      code: lambda.Code.fromAsset('functions/distributions/list'),
-      environment: lambdaEnv,
-      role: lambdaRole,
-      timeout: cdk.Duration.seconds(30),
-      memorySize: 256,
-      description: 'Lists CloudFront distributions'
-    });
+    const listDistributionsFunction = createLambdaFunction(
+      'ListDistributionsFunction',
+      'distributions/list',
+      'Lists CloudFront distributions'
+    );
 
-    const getDistributionFunction = new lambda.Function(this, 'GetDistributionFunction', {
-      runtime: lambda.Runtime.NODEJS_18_X,
-      handler: 'index.handler',
-      code: lambda.Code.fromAsset('functions/distributions/get'),
-      environment: lambdaEnv,
-      role: lambdaRole,
-      timeout: cdk.Duration.seconds(30),
-      memorySize: 256,
-      description: 'Gets a CloudFront distribution'
-    });
+    const getDistributionFunction = createLambdaFunction(
+      'GetDistributionFunction',
+      'distributions/get', 
+      'Gets a CloudFront distribution'
+    );
 
-    // Create the main distribution function with AWS SDK v3
-    const createDistributionFunction = new lambda.Function(this, 'CreateDistributionFunction', {
-      runtime: lambda.Runtime.NODEJS_18_X,
-      handler: 'index.handler',
-      code: lambda.Code.fromAsset('functions/distributions/create', {
-        bundling: {
-          image: lambda.Runtime.NODEJS_18_X.bundlingImage,
-          command: [
-            'bash', '-c', [
-              'npm install',
-              'npm install @aws-sdk/client-dynamodb @aws-sdk/lib-dynamodb @aws-sdk/client-cloudfront @aws-sdk/client-sfn @aws-sdk/client-s3 @aws-sdk/client-lambda jszip',
-              'cp -r /asset-input/* /asset-output/',
-              'cp -r node_modules /asset-output/'
-            ].join(' && ')
-          ],
-          local: {
-            tryBundle(outputDir: string) {
-              require('child_process').execSync(
-                `cd functions/distributions/create && npm install && npm install @aws-sdk/client-dynamodb @aws-sdk/lib-dynamodb @aws-sdk/client-cloudfront @aws-sdk/client-sfn @aws-sdk/client-s3 @aws-sdk/client-lambda jszip && mkdir -p ${outputDir} && cp -r * ${outputDir} && cp -r node_modules ${outputDir}`,
-                { stdio: 'inherit' }
-              );
-              return true;
-            }
-          }
-        }
-      }),
-      environment: {
-        ...lambdaEnv,
+    // Create the main distribution function with additional environment variables
+    const createDistributionFunction = createLambdaFunction(
+      'CreateDistributionFunction',
+      'distributions/create',
+      'Creates a CloudFront distribution',
+      cdk.Duration.seconds(60), // Increased timeout for CloudFront operations
+      512, // Increased memory for better performance
+      {
         AWS_ACCOUNT_ID: this.account,
         DEPLOYMENT_STATE_MACHINE_ARN: deploymentStateMachine.stateMachineArn,
         LAMBDA_EDGE_EXECUTION_ROLE_ARN: lambdaRole.roleArn
-      },
-      role: lambdaRole,
-      timeout: cdk.Duration.seconds(60), // Increased timeout for CloudFront operations
-      memorySize: 512, // Increased memory for better performance
-      description: 'Creates a CloudFront distribution'
-    });
-    
-    // Create proxy function for handling CORS and invoking the main function
-    const createDistributionProxyFunction = new lambda.Function(this, 'CreateDistributionProxyFunction', {
-      runtime: lambda.Runtime.NODEJS_18_X,
-      handler: 'index.handler',
-      code: lambda.Code.fromAsset('functions/distributions/create-proxy', {
-        bundling: {
-          image: lambda.Runtime.NODEJS_18_X.bundlingImage,
-          command: [
-            'bash', '-c', [
-              'npm install',
-              'npm install @aws-sdk/client-lambda',
-              'cp -r /asset-input/* /asset-output/',
-              'cp -r node_modules /asset-output/'
-            ].join(' && ')
-          ],
-          local: {
-            tryBundle(outputDir: string) {
-              require('child_process').execSync(
-                `cd functions/distributions/create-proxy && npm install && npm install @aws-sdk/client-lambda && mkdir -p ${outputDir} && cp -r * ${outputDir} && cp -r node_modules ${outputDir}`,
-                { stdio: 'inherit' }
-              );
-              return true;
+      }
+    );
+    // Create proxy function for Node.js only (Python doesn't need proxy pattern)
+    let createDistributionProxyFunction: lambda.Function;
+    if (props.runtime === 'nodejs') {
+      createDistributionProxyFunction = new lambda.Function(this, 'CreateDistributionProxyFunction', {
+        runtime: lambda.Runtime.NODEJS_18_X,
+        handler: 'index.handler',
+        code: lambda.Code.fromAsset('functions/distributions/create-proxy', {
+          bundling: {
+            image: lambda.Runtime.NODEJS_18_X.bundlingImage,
+            command: [
+              'bash', '-c', [
+                'npm install',
+                'npm install @aws-sdk/client-lambda',
+                'cp -r /asset-input/* /asset-output/',
+                'cp -r node_modules /asset-output/'
+              ].join(' && ')
+            ],
+            local: {
+              tryBundle(outputDir: string) {
+                require('child_process').execSync(
+                  `cd functions/distributions/create-proxy && npm install && npm install @aws-sdk/client-lambda && mkdir -p ${outputDir} && cp -r * ${outputDir} && cp -r node_modules ${outputDir}`,
+                  { stdio: 'inherit' }
+                );
+                return true;
+              }
             }
           }
-        }
-      }),
-      environment: {
-        TARGET_FUNCTION_NAME: createDistributionFunction.functionName
-      },
-      role: lambdaRole,
-      timeout: cdk.Duration.seconds(30),
-      memorySize: 256,
-      description: 'Proxy for creating CloudFront distributions with proper CORS handling'
-    });
+        }),
+        environment: {
+          TARGET_FUNCTION_NAME: createDistributionFunction.functionName
+        },
+        role: lambdaRole,
+        timeout: cdk.Duration.seconds(30),
+        memorySize: 256,
+        description: 'Proxy for creating CloudFront distributions with proper CORS handling'
+      });
+    } else {
+      // For Python, use the main function directly (no proxy needed)
+      createDistributionProxyFunction = createDistributionFunction;
+    }
 
-    const updateDistributionFunction = new lambda.Function(this, 'UpdateDistributionFunction', {
-      runtime: lambda.Runtime.NODEJS_18_X,
-      handler: 'index.handler',
-      code: lambda.Code.fromAsset('functions/distributions/update'),
-      environment: lambdaEnv,
-      role: lambdaRole,
-      timeout: cdk.Duration.seconds(30),
-      memorySize: 256,
-      description: 'Updates a CloudFront distribution'
-    });
+    const updateDistributionFunction = createLambdaFunction(
+      'UpdateDistributionFunction',
+      'distributions/update',
+      'Updates a CloudFront distribution'
+    );
 
-    const deleteDistributionFunction = new lambda.Function(this, 'DeleteDistributionFunction', {
-      runtime: lambda.Runtime.NODEJS_18_X,
-      handler: 'index.handler',
-      code: lambda.Code.fromAsset('functions/distributions/delete'),
-      environment: lambdaEnv,
-      role: lambdaRole,
-      timeout: cdk.Duration.seconds(30),
-      memorySize: 256,
-      description: 'Deletes a CloudFront distribution'
-    });
+    const deleteDistributionFunction = createLambdaFunction(
+      'DeleteDistributionFunction',
+      'distributions/delete',
+      'Deletes a CloudFront distribution'
+    );
 
-    const getDistributionStatusFunction = new lambda.Function(this, 'GetDistributionStatusFunction', {
-      runtime: lambda.Runtime.NODEJS_18_X,
-      handler: 'index.handler',
-      code: lambda.Code.fromAsset('functions/distributions/getStatus'),
-      environment: lambdaEnv,
-      role: lambdaRole,
-      timeout: cdk.Duration.seconds(30),
-      memorySize: 256,
-      description: 'Gets the status of a CloudFront distribution'
-    });
+    const getDistributionStatusFunction = createLambdaFunction(
+      'GetDistributionStatusFunction',
+      'distributions/getStatus',
+      'Gets the status of a CloudFront distribution'
+    );
 
-    const invalidateDistributionFunction = new lambda.Function(this, 'InvalidateDistributionFunction', {
-      runtime: lambda.Runtime.NODEJS_18_X,
-      handler: 'index.handler',
-      code: lambda.Code.fromAsset('functions/distributions/invalidate'),
-      environment: lambdaEnv,
-      role: lambdaRole,
-      timeout: cdk.Duration.seconds(30),
-      memorySize: 256,
-      description: 'Creates an invalidation for a CloudFront distribution'
-    });
+    const invalidateDistributionFunction = createLambdaFunction(
+      'InvalidateDistributionFunction',
+      'distributions/invalidate',
+      'Creates an invalidation for a CloudFront distribution'
+    );
 
     // Create Lambda functions for origins
-    const listOriginsFunction = new lambda.Function(this, 'ListOriginsFunction', {
-      runtime: lambda.Runtime.NODEJS_18_X,
-      handler: 'index.handler',
-      code: lambda.Code.fromAsset('functions/origins/list'),
-      environment: lambdaEnv,  // lambdaEnv now includes ORIGINS_TABLE
-      role: lambdaRole,
-      timeout: cdk.Duration.seconds(30),
-      memorySize: 256,
-      description: 'Lists S3 origins for CloudFront distributions'
-    });
+    const listOriginsFunction = createLambdaFunction(
+      'ListOriginsFunction',
+      'origins/list',
+      'Lists S3 origins for CloudFront distributions'
+    );
 
-    const getOriginFunction = new lambda.Function(this, 'GetOriginFunction', {
-      runtime: lambda.Runtime.NODEJS_18_X,
-      handler: 'index.handler',
-      code: lambda.Code.fromAsset('functions/origins/get'),
-      environment: lambdaEnv,  // lambdaEnv now includes ORIGINS_TABLE
-      role: lambdaRole,
-      timeout: cdk.Duration.seconds(30),
-      memorySize: 256,
-      description: 'Gets an S3 origin for CloudFront distributions'
-    });
+    const getOriginFunction = createLambdaFunction(
+      'GetOriginFunction',
+      'origins/get',
+      'Gets an S3 origin for CloudFront distributions'
+    );
 
-    const createOriginFunction = new lambda.Function(this, 'CreateOriginFunction', {
-      runtime: lambda.Runtime.NODEJS_18_X,
-      handler: 'index.handler',
-      code: lambda.Code.fromAsset('functions/origins/create', {
-        bundling: {
-          image: lambda.Runtime.NODEJS_18_X.bundlingImage,
-          command: [
-            'bash', '-c', [
-              'npm install',
-              'npm install @aws-sdk/client-dynamodb @aws-sdk/lib-dynamodb @aws-sdk/client-s3',
-              'cp -r /asset-input/* /asset-output/',
-              'cp -r node_modules /asset-output/'
-            ].join(' && ')
-          ],
-          local: {
-            tryBundle(outputDir: string) {
-              require('child_process').execSync(
-                `cd functions/origins/create && npm install && npm install @aws-sdk/client-dynamodb @aws-sdk/lib-dynamodb @aws-sdk/client-s3 @aws-sdk/client-cloudfront && mkdir -p ${outputDir} && cp -r * ${outputDir} && cp -r node_modules ${outputDir}`,
-                { stdio: 'inherit' }
-              );
-              return true;
-            }
-          }
-        }
-      }),
-      environment: lambdaEnv,  // lambdaEnv now includes ORIGINS_TABLE
-      role: lambdaRole,
-      timeout: cdk.Duration.seconds(60),
-      memorySize: 256,
-      description: 'Creates an S3 origin for CloudFront distributions'
-    });
+    const createOriginFunction = createLambdaFunction(
+      'CreateOriginFunction',
+      'origins/create',
+      'Creates an S3 origin for CloudFront distributions',
+      cdk.Duration.seconds(60), // Increased timeout for S3 operations
+      512 // Increased memory for better performance
+    );
 
-    const updateOriginFunction = new lambda.Function(this, 'UpdateOriginFunction', {
-      runtime: lambda.Runtime.NODEJS_18_X,
-      handler: 'index.handler',
-      code: lambda.Code.fromAsset('functions/origins/update', {
-        bundling: {
-          image: lambda.Runtime.NODEJS_18_X.bundlingImage,
-          command: [
-            'bash', '-c', [
-              'npm install',
-              'npm install @aws-sdk/client-dynamodb @aws-sdk/lib-dynamodb @aws-sdk/client-s3',
-              'cp -r /asset-input/* /asset-output/',
-              'cp -r node_modules /asset-output/'
-            ].join(' && ')
-          ],
-          local: {
-            tryBundle(outputDir: string) {
-              require('child_process').execSync(
-                `cd functions/origins/update && npm install && npm install @aws-sdk/client-dynamodb @aws-sdk/lib-dynamodb @aws-sdk/client-s3 && mkdir -p ${outputDir} && cp -r * ${outputDir} && cp -r node_modules ${outputDir}`,
-                { stdio: 'inherit' }
-              );
-              return true;
-            }
-          }
-        }
-      }),
-      environment: lambdaEnv,  // lambdaEnv now includes ORIGINS_TABLE
-      role: lambdaRole,
-      timeout: cdk.Duration.seconds(60),
-      memorySize: 256,
-      description: 'Updates an S3 origin for CloudFront distributions'
-    });
+    const updateOriginFunction = createLambdaFunction(
+      'UpdateOriginFunction',
+      'origins/update',
+      'Updates an S3 origin for CloudFront distributions',
+      cdk.Duration.seconds(60), // Increased timeout for S3 operations
+      512 // Increased memory for better performance
+    );
 
-    const deleteOriginFunction = new lambda.Function(this, 'DeleteOriginFunction', {
-      runtime: lambda.Runtime.NODEJS_18_X,
-      handler: 'index.handler',
-      code: lambda.Code.fromAsset('functions/origins/delete', {
-        bundling: {
-          image: lambda.Runtime.NODEJS_18_X.bundlingImage,
-          command: [
-            'bash', '-c', [
-              'npm install',
-              'npm install @aws-sdk/client-dynamodb @aws-sdk/lib-dynamodb @aws-sdk/client-s3',
-              'cp -r /asset-input/* /asset-output/',
-              'cp -r node_modules /asset-output/'
-            ].join(' && ')
-          ],
-          local: {
-            tryBundle(outputDir: string) {
-              require('child_process').execSync(
-                `cd functions/origins/delete && npm install && npm install @aws-sdk/client-dynamodb @aws-sdk/lib-dynamodb @aws-sdk/client-s3 @aws-sdk/client-cloudfront && mkdir -p ${outputDir} && cp -r * ${outputDir} && cp -r node_modules ${outputDir}`,
-                { stdio: 'inherit' }
-              );
-              return true;
-            }
-          }
-        }
-      }),
-      environment: lambdaEnv,  // lambdaEnv now includes ORIGINS_TABLE
-      role: lambdaRole,
-      timeout: cdk.Duration.seconds(60),
-      memorySize: 256,
-      description: 'Deletes an S3 origin for CloudFront distributions'
-    });
+    const deleteOriginFunction = createLambdaFunction(
+      'DeleteOriginFunction',
+      'origins/delete',
+      'Deletes an S3 origin for CloudFront distributions',
+      cdk.Duration.seconds(60), // Increased timeout for S3 operations
+      512 // Increased memory for better performance
+    );
 
     // Lambda@Edge Functions
-    const createLambdaEdgeFunctionFunction = new lambda.Function(this, 'CreateLambdaEdgeFunctionFunction', {
-      runtime: lambda.Runtime.NODEJS_18_X,
-      handler: 'index.handler',
-      code: lambda.Code.fromAsset('functions/lambda-edge/create', {
-        bundling: {
-          image: lambda.Runtime.NODEJS_18_X.bundlingImage,
-          user: 'root',
-          command: [
-            'bash', '-c',
-            'npm install @aws-sdk/client-lambda @aws-sdk/client-dynamodb @aws-sdk/lib-dynamodb jszip uuid && cp -r /asset-input/* /asset-output/ && chown -R 1000:1000 /asset-output'
-          ]
-        }
-      }),
-      environment: {
-        ...lambdaEnv,
+    const createLambdaEdgeFunctionFunction = createLambdaFunction(
+      'CreateLambdaEdgeFunctionFunction',
+      'lambda-edge/create',
+      'Creates a Lambda@Edge function for multi-origin routing',
+      cdk.Duration.seconds(60), // Increased timeout for Lambda@Edge operations
+      512, // Increased memory for better performance
+      {
         LAMBDA_EDGE_EXECUTION_ROLE_ARN: lambdaRole.roleArn
-      },
-      role: lambdaRole,
-      timeout: cdk.Duration.seconds(60),
-      memorySize: 256,
-      description: 'Creates Lambda@Edge functions for multi-origin routing'
-    });
+      }
+    );
 
-    const listLambdaEdgeFunctionsFunction = new lambda.Function(this, 'ListLambdaEdgeFunctionsFunction', {
-      runtime: lambda.Runtime.NODEJS_18_X,
-      handler: 'index.handler',
-      code: lambda.Code.fromAsset('functions/lambda-edge/list'),
-      environment: lambdaEnv,
-      role: lambdaRole,
-      timeout: cdk.Duration.seconds(30),
-      memorySize: 256,
-      description: 'Lists Lambda@Edge functions'
-    });
+    const listLambdaEdgeFunctionsFunction = createLambdaFunction(
+      'ListLambdaEdgeFunctionsFunction',
+      'lambda-edge/list',
+      'Lists Lambda@Edge functions'
+    );
 
-    const getLambdaEdgeFunctionFunction = new lambda.Function(this, 'GetLambdaEdgeFunctionFunction', {
-      runtime: lambda.Runtime.NODEJS_18_X,
-      handler: 'index.handler',
-      code: lambda.Code.fromAsset('functions/lambda-edge/get'),
-      environment: lambdaEnv,
-      role: lambdaRole,
-      timeout: cdk.Duration.seconds(30),
-      memorySize: 256,
-      description: 'Gets a Lambda@Edge function'
-    });
+    const getLambdaEdgeFunctionFunction = createLambdaFunction(
+      'GetLambdaEdgeFunctionFunction',
+      'lambda-edge/get',
+      'Gets a Lambda@Edge function'
+    );
 
-    const previewLambdaEdgeFunctionFunction = new lambda.Function(this, 'PreviewLambdaEdgeFunctionFunction', {
-      runtime: lambda.Runtime.NODEJS_18_X,
-      handler: 'index.handler',
-      code: lambda.Code.fromAsset('functions/lambda-edge/preview'),
-      environment: lambdaEnv,
-      role: lambdaRole,
-      timeout: cdk.Duration.seconds(30),
-      memorySize: 256,
-      description: 'Previews Lambda@Edge function code'
-    });
+    const previewLambdaEdgeFunctionFunction = createLambdaFunction(
+      'PreviewLambdaEdgeFunctionFunction',
+      'lambda-edge/preview',
+      'Previews Lambda@Edge function code'
+    );
 
     // Create Lambda functions for templates
-    const listTemplatesFunction = new lambda.Function(this, 'ListTemplatesFunction', {
-      runtime: lambda.Runtime.NODEJS_18_X,
-      handler: 'index.handler',
-      code: lambda.Code.fromAsset('functions/templates/list', {
-        bundling: {
-          image: lambda.Runtime.NODEJS_18_X.bundlingImage,
-          command: [
-            'bash', '-c', [
-              'npm install',
-              'npm install @aws-sdk/client-dynamodb @aws-sdk/lib-dynamodb',
-              'cp -r /asset-input/* /asset-output/',
-              'cp -r node_modules /asset-output/'
-            ].join(' && ')
-          ],
-          local: {
-            tryBundle(outputDir: string) {
-              require('child_process').execSync(
-                `cd functions/templates/list && npm install && npm install @aws-sdk/client-dynamodb @aws-sdk/lib-dynamodb && mkdir -p ${outputDir} && cp -r * ${outputDir} && cp -r node_modules ${outputDir}`,
-                { stdio: 'inherit' }
-              );
-              return true;
-            }
-          }
-        }
-      }),
-      environment: lambdaEnv,
-      role: lambdaRole,
-      timeout: cdk.Duration.seconds(30),
-      memorySize: 256,
-      description: 'Lists CloudFront distribution templates'
-    });
+    const listTemplatesFunction = createLambdaFunction(
+      'ListTemplatesFunction',
+      'templates/list',
+      'Lists CloudFront distribution templates'
+    );
 
-    const getTemplateFunction = new lambda.Function(this, 'GetTemplateFunction', {
-      runtime: lambda.Runtime.NODEJS_18_X,
-      handler: 'index.handler',
-      code: lambda.Code.fromAsset('functions/templates/get', {
-        bundling: {
-          image: lambda.Runtime.NODEJS_18_X.bundlingImage,
-          command: [
-            'bash', '-c', [
-              'npm install',
-              'npm install @aws-sdk/client-dynamodb @aws-sdk/lib-dynamodb',
-              'cp -r /asset-input/* /asset-output/',
-              'cp -r node_modules /asset-output/'
-            ].join(' && ')
-          ],
-          local: {
-            tryBundle(outputDir: string) {
-              require('child_process').execSync(
-                `cd functions/templates/get && npm install && npm install @aws-sdk/client-dynamodb @aws-sdk/lib-dynamodb && mkdir -p ${outputDir} && cp -r * ${outputDir} && cp -r node_modules ${outputDir}`,
-                { stdio: 'inherit' }
-              );
-              return true;
-            }
-          }
-        }
-      }),
-      environment: lambdaEnv,
-      role: lambdaRole,
-      timeout: cdk.Duration.seconds(30),
-      memorySize: 256,
-      description: 'Gets a CloudFront distribution template'
-    });
+    const getTemplateFunction = createLambdaFunction(
+      'GetTemplateFunction',
+      'templates/get',
+      'Gets a CloudFront distribution template'
+    );
 
-    const createTemplateFunction = new lambda.Function(this, 'CreateTemplateFunction', {
-      runtime: lambda.Runtime.NODEJS_18_X,
-      handler: 'index.handler',
-      code: lambda.Code.fromAsset('functions/templates/create', {
-        bundling: {
-          image: lambda.Runtime.NODEJS_18_X.bundlingImage,
-          command: [
-            'bash', '-c', [
-              'npm install',
-              'npm install @aws-sdk/client-dynamodb @aws-sdk/lib-dynamodb uuid',
-              'cp -r /asset-input/* /asset-output/',
-              'cp -r node_modules /asset-output/'
-            ].join(' && ')
-          ],
-          local: {
-            tryBundle(outputDir: string) {
-              require('child_process').execSync(
-                `cd functions/templates/create && npm install && npm install @aws-sdk/client-dynamodb @aws-sdk/lib-dynamodb uuid && mkdir -p ${outputDir} && cp -r * ${outputDir} && cp -r node_modules ${outputDir}`,
-                { stdio: 'inherit' }
-              );
-              return true;
-            }
-          }
-        }
-      }),
-      environment: lambdaEnv,
-      role: lambdaRole,
-      timeout: cdk.Duration.seconds(30),
-      memorySize: 256,
-      description: 'Creates a CloudFront distribution template'
-    });
+    const createTemplateFunction = createLambdaFunction(
+      'CreateTemplateFunction',
+      'templates/create',
+      'Creates a CloudFront distribution template'
+    );
     
     // Create proxy function for handling CORS and invoking the main function
-    const createTemplateProxyFunction = new lambda.Function(this, 'CreateTemplateProxyFunction', {
-      runtime: lambda.Runtime.NODEJS_18_X,
-      handler: 'index.handler',
-      code: lambda.Code.fromAsset('functions/templates/create-proxy', {
-        bundling: {
-          image: lambda.Runtime.NODEJS_18_X.bundlingImage,
-          command: [
-            'bash', '-c', [
-              'npm install',
-              'npm install @aws-sdk/client-lambda',
-              'cp -r /asset-input/* /asset-output/',
-              'cp -r node_modules /asset-output/'
-            ].join(' && ')
-          ],
-          local: {
-            tryBundle(outputDir: string) {
-              require('child_process').execSync(
-                `cd functions/templates/create-proxy && npm install && npm install @aws-sdk/client-lambda && mkdir -p ${outputDir} && cp -r * ${outputDir} && cp -r node_modules ${outputDir}`,
-                { stdio: 'inherit' }
-              );
-              return true;
+    // Create proxy function for Node.js only (Python doesn't need proxy pattern)
+    let createTemplateProxyFunction: lambda.Function;
+    if (props.runtime === 'nodejs') {
+      createTemplateProxyFunction = new lambda.Function(this, 'CreateTemplateProxyFunction', {
+        runtime: lambda.Runtime.NODEJS_18_X,
+        handler: 'index.handler',
+        code: lambda.Code.fromAsset('functions/templates/create-proxy', {
+          bundling: {
+            image: lambda.Runtime.NODEJS_18_X.bundlingImage,
+            command: [
+              'bash', '-c', [
+                'npm install',
+                'npm install @aws-sdk/client-lambda',
+                'cp -r /asset-input/* /asset-output/',
+                'cp -r node_modules /asset-output/'
+              ].join(' && ')
+            ],
+            local: {
+              tryBundle(outputDir: string) {
+                require('child_process').execSync(
+                  `cd functions/templates/create-proxy && npm install && npm install @aws-sdk/client-lambda && mkdir -p ${outputDir} && cp -r * ${outputDir} && cp -r node_modules ${outputDir}`,
+                  { stdio: 'inherit' }
+                );
+                return true;
+              }
             }
           }
-        }
-      }),
-      environment: {
-        TARGET_FUNCTION_NAME: createTemplateFunction.functionName
-      },
-      role: lambdaRole,
-      timeout: cdk.Duration.seconds(30),
-      memorySize: 256,
-      description: 'Proxy for creating CloudFront distribution templates with proper CORS handling'
-    });
+        }),
+        environment: {
+          TARGET_FUNCTION_NAME: createTemplateFunction.functionName
+        },
+        role: lambdaRole,
+        timeout: cdk.Duration.seconds(30),
+        memorySize: 256,
+        description: 'Proxy for creating CloudFront distribution templates with proper CORS handling'
+      });
+    } else {
+      // For Python, use the main function directly (no proxy needed)
+      createTemplateProxyFunction = createTemplateFunction;
+    }
 
-    const updateTemplateFunction = new lambda.Function(this, 'UpdateTemplateFunction', {
-      runtime: lambda.Runtime.NODEJS_18_X,
-      handler: 'index.handler',
-      code: lambda.Code.fromAsset('functions/templates/update', {
-        bundling: {
-          image: lambda.Runtime.NODEJS_18_X.bundlingImage,
-          command: [
-            'bash', '-c', [
-              'npm install',
-              'npm install @aws-sdk/client-dynamodb @aws-sdk/lib-dynamodb',
-              'cp -r /asset-input/* /asset-output/',
-              'cp -r node_modules /asset-output/'
-            ].join(' && ')
-          ],
-          local: {
-            tryBundle(outputDir: string) {
-              require('child_process').execSync(
-                `cd functions/templates/update && npm install && npm install @aws-sdk/client-dynamodb @aws-sdk/lib-dynamodb && mkdir -p ${outputDir} && cp -r * ${outputDir} && cp -r node_modules ${outputDir}`,
-                { stdio: 'inherit' }
-              );
-              return true;
-            }
-          }
-        }
-      }),
-      environment: lambdaEnv,
-      role: lambdaRole,
-      timeout: cdk.Duration.seconds(30),
-      memorySize: 256,
-      description: 'Updates a CloudFront distribution template'
-    });
+    const updateTemplateFunction = createLambdaFunction(
+      'UpdateTemplateFunction',
+      'templates/update',
+      'Updates a CloudFront distribution template'
+    );
 
-    const deleteTemplateFunction = new lambda.Function(this, 'DeleteTemplateFunction', {
-      runtime: lambda.Runtime.NODEJS_18_X,
-      handler: 'index.handler',
-      code: lambda.Code.fromAsset('functions/templates/delete', {
-        bundling: {
-          image: lambda.Runtime.NODEJS_18_X.bundlingImage,
-          command: [
-            'bash', '-c', [
-              'npm install',
-              'npm install @aws-sdk/client-dynamodb @aws-sdk/lib-dynamodb',
-              'cp -r /asset-input/* /asset-output/',
-              'cp -r node_modules /asset-output/'
-            ].join(' && ')
-          ],
-          local: {
-            tryBundle(outputDir: string) {
-              require('child_process').execSync(
-                `cd functions/templates/delete && npm install && npm install @aws-sdk/client-dynamodb @aws-sdk/lib-dynamodb && mkdir -p ${outputDir} && cp -r * ${outputDir} && cp -r node_modules ${outputDir}`,
-                { stdio: 'inherit' }
-              );
-              return true;
-            }
-          }
-        }
-      }),
-      environment: lambdaEnv,
-      role: lambdaRole,
-      timeout: cdk.Duration.seconds(30),
-      memorySize: 256,
-      description: 'Deletes a CloudFront distribution template'
-    });
+    const deleteTemplateFunction = createLambdaFunction(
+      'DeleteTemplateFunction',
+      'templates/delete',
+      'Deletes a CloudFront distribution template'
+    );
 
-    const applyTemplateFunction = new lambda.Function(this, 'ApplyTemplateFunction', {
-      runtime: lambda.Runtime.NODEJS_18_X,
-      handler: 'index.handler',
-      code: lambda.Code.fromAsset('functions/templates/apply', {
-        bundling: {
-          image: lambda.Runtime.NODEJS_18_X.bundlingImage,
-          command: [
-            'bash', '-c', [
-              'npm install',
-              'npm install @aws-sdk/client-dynamodb @aws-sdk/lib-dynamodb @aws-sdk/client-lambda',
-              'cp -r /asset-input/* /asset-output/',
-              'cp -r node_modules /asset-output/'
-            ].join(' && ')
-          ],
-          local: {
-            tryBundle(outputDir: string) {
-              require('child_process').execSync(
-                `cd functions/templates/apply && npm install && npm install @aws-sdk/client-dynamodb @aws-sdk/lib-dynamodb @aws-sdk/client-lambda && mkdir -p ${outputDir} && cp -r * ${outputDir} && cp -r node_modules ${outputDir}`,
-                { stdio: 'inherit' }
-              );
-              return true;
-            }
-          }
-        }
-      }),
-      environment: {
-        ...lambdaEnv,
+    const applyTemplateFunction = createLambdaFunction(
+      'ApplyTemplateFunction',
+      'templates/apply',
+      'Applies a CloudFront distribution template',
+      cdk.Duration.seconds(60), // Increased timeout for template application
+      512, // Increased memory for better performance
+      {
         CREATE_DISTRIBUTION_FUNCTION: createDistributionFunction.functionName
-      },
-      role: lambdaRole,
-      timeout: cdk.Duration.seconds(30),
-      memorySize: 256,
-      description: 'Applies a CloudFront distribution template'
-    });
+      }
+    );
 
     // Create API resources and methods
     const distributionsResource = this.api.root.addResource('distributions');
@@ -912,27 +625,17 @@ export class CfManagerBackendStack extends cdk.Stack {
     });
 
     // Certificate management Lambda functions
-    const listCertificatesFunction = new lambda.Function(this, 'ListCertificatesFunction', {
-      runtime: lambda.Runtime.NODEJS_18_X,
-      handler: 'index.handler',
-      code: lambda.Code.fromAsset('functions/certificates/list'),
-      environment: lambdaEnv,
-      role: lambdaRole,
-      timeout: cdk.Duration.seconds(30),
-      memorySize: 256,
-      description: 'Lists available SSL certificates from ACM'
-    });
+    const listCertificatesFunction = createLambdaFunction(
+      'ListCertificatesFunction',
+      'certificates/list',
+      'Lists SSL certificates from ACM'
+    );
 
-    const getCertificateFunction = new lambda.Function(this, 'GetCertificateFunction', {
-      runtime: lambda.Runtime.NODEJS_18_X,
-      handler: 'index.handler',
-      code: lambda.Code.fromAsset('functions/certificates/get'),
-      environment: lambdaEnv,
-      role: lambdaRole,
-      timeout: cdk.Duration.seconds(30),
-      memorySize: 256,
-      description: 'Gets detailed information about a specific SSL certificate'
-    });
+    const getCertificateFunction = createLambdaFunction(
+      'GetCertificateFunction',
+      'certificates/get',
+      'Gets SSL certificate details from ACM'
+    );
 
     // Add ACM permissions to Lambda role
     lambdaRole.addToPolicy(new iam.PolicyStatement({

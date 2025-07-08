@@ -2,6 +2,22 @@
 
 This project contains the AWS CDK infrastructure code for deploying the CloudFront Manager application, which allows developers to create, modify, and manage CloudFront distributions through a user-friendly interface.
 
+## 🚀 **NEW: Dual Runtime Support**
+
+The CloudFront Manager now supports **both Python and Node.js runtimes**:
+
+- **🐍 Python (Default)**: Superior maintainability, type safety, and error handling
+- **📦 Node.js (Optional)**: Original implementation, fully compatible
+
+### **Quick Start**
+```bash
+# Deploy with Python functions (recommended)
+cdk deploy --all
+
+# Deploy with Node.js functions (optional)
+cdk deploy --all --context runtime=nodejs
+```
+
 ## Architecture
 
 The CloudFront Manager application consists of the following components:
@@ -427,6 +443,27 @@ You should see output similar to:
 **Note**: This setup is required only once per AWS account. If you encounter the error "CloudWatch Logs role ARN must be set in account settings to enable logging" during deployment, it means this prerequisite step was not completed.
 
 ## Deployment
+
+### **Runtime Selection**
+
+Choose between Python (recommended) and Node.js runtimes:
+
+```bash
+# Python runtime (default) - Recommended for new deployments
+cdk deploy --all
+
+# Node.js runtime - For compatibility with existing deployments
+cdk deploy --all --context runtime=nodejs
+```
+
+### **Why Python is Recommended**
+- **Better Error Handling**: Comprehensive boto3 exception handling
+- **Type Safety**: Complete type hints throughout all functions
+- **Performance**: Optimized AWS SDK usage and parallel processing
+- **Maintainability**: Cleaner code structure and better documentation
+- **Development Speed**: Faster development and debugging experience
+
+### **Deployment Steps**
 
 1. Install dependencies:
 

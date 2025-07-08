@@ -1598,7 +1598,7 @@ function createDistributionFromForm() {
                 // SSL configuration
                 ViewerCertificate: certificateArn ? {
                     CloudFrontDefaultCertificate: false,
-                    AcmCertificateArn: certificateArn,
+                    ACMCertificateArn: certificateArn,
                     Certificate: certificateArn,
                     SSLSupportMethod: 'sni-only',
                     MinimumProtocolVersion: minTlsVersion,
@@ -1716,7 +1716,7 @@ function createDistributionFromForm() {
             if (domains.length > 0) {
                 distributionConfig.ViewerCertificate = {
                     CloudFrontDefaultCertificate: false,  // Added: Required when using custom certificate
-                    AcmCertificateArn: certificateArn,
+                    ACMCertificateArn: certificateArn,
                     Certificate: certificateArn,           // Added: Required Certificate field
                     SSLSupportMethod: "sni-only",          // Fixed: Capital SSL
                     MinimumProtocolVersion: minTlsVersion,
@@ -2128,14 +2128,14 @@ function createTemplateWithSSL() {
 function displayCertificateInfo(config, sslConfig = null) {
     const viewerCert = config.ViewerCertificate;
     
-    if (viewerCert && viewerCert.AcmCertificateArn) {
+    if (viewerCert && viewerCert.ACMCertificateArn) {
         const domains = config.Aliases?.Items || [];
         return `
             <div class="certificate-info ssl-enabled">
                 <h4><i class="fas fa-lock text-success"></i> SSL Certificate</h4>
                 <div class="cert-details">
                     <p><strong>Type:</strong> AWS Certificate Manager</p>
-                    <p><strong>ARN:</strong> <code class="cert-arn">${viewerCert.AcmCertificateArn}</code></p>
+                    <p><strong>ARN:</strong> <code class="cert-arn">${viewerCert.ACMCertificateArn}</code></p>
                     <p><strong>TLS Version:</strong> ${viewerCert.MinimumProtocolVersion}</p>
                     <p><strong>Support Method:</strong> ${viewerCert.SslSupportMethod}</p>
                     <p><strong>Protocol Policy:</strong> ${config.DefaultCacheBehavior?.ViewerProtocolPolicy || 'Not specified'}</p>
@@ -2420,7 +2420,23 @@ async function loadAvailableOrigins() {
         populateOriginSelects();
     } else {
         console.warn('No origins available from API or existing dropdown');
+        // Show helpful message when no origins are available
+        showNoOriginsMessage();
     }
+}
+
+/**
+ * Show message when no origins are available
+ */
+function showNoOriginsMessage() {
+    const dropdowns = ['origin-domain', 'default-origin'];
+    
+    dropdowns.forEach(dropdownId => {
+        const select = document.getElementById(dropdownId);
+        if (select) {
+            select.innerHTML = '<option value="">No origins available - Create origins first</option>';
+        }
+    });
 }
 
 /**
@@ -2525,18 +2541,28 @@ function setupMultiOriginEventListeners() {
  * Populate origin select dropdowns
  */
 function populateOriginSelects() {
-    const defaultOriginSelect = document.getElementById('default-origin');
-    if (!defaultOriginSelect) return;
+    // Populate both origin dropdowns
+    const dropdowns = [
+        { id: 'origin-domain', placeholder: 'Select an origin...' },
+        { id: 'default-origin', placeholder: 'Select default origin...' }
+    ];
     
-    // Clear existing options (except the first placeholder)
-    defaultOriginSelect.innerHTML = '<option value="">Select default origin...</option>';
-    
-    // Add origins to select
-    availableOrigins.forEach(origin => {
-        const option = document.createElement('option');
-        option.value = origin.id || origin.originId; // Use 'id' first, fallback to 'originId'
-        option.textContent = `${origin.name} (${origin.bucketName})`;
-        defaultOriginSelect.appendChild(option);
+    dropdowns.forEach(dropdown => {
+        const select = document.getElementById(dropdown.id);
+        if (!select) return;
+        
+        // Clear existing options (except the first placeholder)
+        select.innerHTML = `<option value="">${dropdown.placeholder}</option>`;
+        
+        // Add origins to select
+        availableOrigins.forEach(origin => {
+            const option = document.createElement('option');
+            option.value = origin.id || origin.originId; // Use 'id' first, fallback to 'originId'
+            option.textContent = `${origin.name} (${origin.bucketName})`;
+            select.appendChild(option);
+        });
+        
+        console.log(`Populated ${dropdown.id} with ${availableOrigins.length} origins`);
     });
 }
 
