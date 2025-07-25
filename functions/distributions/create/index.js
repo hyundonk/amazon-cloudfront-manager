@@ -14,6 +14,7 @@ const { SFNClient, StartExecutionCommand } = require('@aws-sdk/client-sfn');
 const { S3Client, PutBucketPolicyCommand, GetBucketPolicyCommand } = require('@aws-sdk/client-s3');
 const { LambdaClient, CreateFunctionCommand, PublishVersionCommand } = require('@aws-sdk/client-lambda');
 const { v4: uuidv4 } = require('uuid');
+const { configureAccessLogsV2 } = require('../configure-access-logs');
 
 // CORS headers
 const CORS_HEADERS = {
@@ -592,6 +593,30 @@ const createMultiOriginDistribution = async (body, user) => {
     }));
     console.log('Distribution record saved to DynamoDB');
 
+    // 6.5. Configure CloudFront Standard v2 logging (access log v2)
+    try {
+      const accessLogsResult = await configureAccessLogsV2(distributionRecord.distributionId, cfResult.Distribution.Id);
+      if (accessLogsResult.success && accessLogsResult.configured) {
+        console.log('Access logs v2 configured successfully:', accessLogsResult.configuration);
+        
+        // Update distribution record with access logs configuration
+        await docClient.send(new UpdateCommand({
+          TableName: process.env.DISTRIBUTIONS_TABLE,
+          Key: { distributionId: distributionRecord.distributionId },
+          UpdateExpression: 'SET accessLogsV2 = :accessLogs, updatedAt = :updatedAt',
+          ExpressionAttributeValues: {
+            ':accessLogs': accessLogsResult.configuration,
+            ':updatedAt': new Date().toISOString()
+          }
+        }));
+      } else {
+        console.log('Access logs v2 not configured:', accessLogsResult.reason || accessLogsResult.error);
+      }
+    } catch (accessLogsError) {
+      console.error('Error configuring access logs v2:', accessLogsError);
+      // Don't fail the distribution creation if access logs configuration fails
+    }
+
     // 7. Update origins with distribution association
     for (const origin of origins.all) {
       await updateOriginDistributionAssociation(origin.originId, cfResult.Distribution.ARN);
@@ -970,6 +995,30 @@ exports.handler = async (event) => {
         console.error('Error updating origin OAC policy:', oacUpdateError);
         // Don't fail the distribution creation if OAC update fails
         console.log('Distribution created successfully, but OAC policy update failed');
+      }
+      
+      // Configure CloudFront Standard v2 logging (access log v2)
+      try {
+        const accessLogsResult = await configureAccessLogsV2(internalId, actualDistributionId);
+        if (accessLogsResult.success && accessLogsResult.configured) {
+          console.log('Access logs v2 configured successfully:', accessLogsResult.configuration);
+          
+          // Update distribution record with access logs configuration
+          await docClient.send(new UpdateCommand({
+            TableName: process.env.DISTRIBUTIONS_TABLE,
+            Key: { distributionId: internalId },
+            UpdateExpression: 'SET accessLogsV2 = :accessLogs, updatedAt = :updatedAt',
+            ExpressionAttributeValues: {
+              ':accessLogs': accessLogsResult.configuration,
+              ':updatedAt': new Date().toISOString()
+            }
+          }));
+        } else {
+          console.log('Access logs v2 not configured:', accessLogsResult.reason || accessLogsResult.error);
+        }
+      } catch (accessLogsError) {
+        console.error('Error configuring access logs v2:', accessLogsError);
+        // Don't fail the distribution creation if access logs configuration fails
       }
       
       // Record history

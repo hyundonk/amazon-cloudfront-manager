@@ -410,6 +410,72 @@
                                 <button class="btn-primary">Generate New API Key</button>
                             </div>
                         </div>
+
+                        <!-- Consolidated Access Logs Settings -->
+                        <div class="settings-section">
+                            <h2>CloudFront Access Logs (Standard v2)</h2>
+                            <div class="settings-form">
+                                <div class="form-group">
+                                    <div class="form-check">
+                                        <input type="checkbox" id="access-logs-enabled">
+                                        <label for="access-logs-enabled">Enable consolidated access logs for all distributions</label>
+                                    </div>
+                                    <small class="form-help">When enabled, all new CloudFront distributions will automatically send access logs to a centralized S3 bucket with JSON/Parquet format and partitioning support.</small>
+                                </div>
+
+                                <div class="form-group" id="access-logs-config" style="display: none;">
+                                    <label>S3 Bucket Name</label>
+                                    <input type="text" id="access-logs-bucket" placeholder="consolidated-access-logs-123456789012-abc123">
+                                    <small class="form-help">S3 bucket where access logs will be stored. Will be created automatically if it doesn't exist.</small>
+                                </div>
+
+                                <div class="form-group" id="access-logs-format-group" style="display: none;">
+                                    <label>Output Format</label>
+                                    <select id="access-logs-format">
+                                        <option value="json">JSON (Recommended)</option>
+                                        <option value="parquet">Parquet (For analytics)</option>
+                                    </select>
+                                    <small class="form-help">JSON format is easier to read, Parquet is more efficient for analytics queries.</small>
+                                </div>
+
+                                <div class="form-group" id="access-logs-partitioning-group" style="display: none;">
+                                    <div class="form-check">
+                                        <input type="checkbox" id="access-logs-partitioning" checked>
+                                        <label for="access-logs-partitioning">Enable partitioning</label>
+                                    </div>
+                                    <small class="form-help">Organizes logs by year/month/day/hour for better query performance and cost optimization.</small>
+                                </div>
+
+                                <div class="form-group" id="access-logs-compression-group" style="display: none;">
+                                    <label>Compression</label>
+                                    <select id="access-logs-compression">
+                                        <option value="gzip">GZIP (Recommended)</option>
+                                        <option value="none">None</option>
+                                    </select>
+                                    <small class="form-help">GZIP compression reduces storage costs and transfer time.</small>
+                                </div>
+
+                                <div class="access-logs-status" id="access-logs-status" style="display: none;">
+                                    <div class="status-item">
+                                        <span class="status-label">Current Status:</span>
+                                        <span class="status-value" id="access-logs-current-status">Not configured</span>
+                                    </div>
+                                    <div class="status-item">
+                                        <span class="status-label">Bucket Region:</span>
+                                        <span class="status-value" id="access-logs-bucket-region">-</span>
+                                    </div>
+                                    <div class="status-item">
+                                        <span class="status-label">Last Updated:</span>
+                                        <span class="status-value" id="access-logs-last-updated">-</span>
+                                    </div>
+                                </div>
+
+                                <div class="form-actions">
+                                    <button class="btn-primary" id="save-access-logs-settings">Save Access Logs Settings</button>
+                                    <button class="btn-secondary" id="test-access-logs-config" style="display: none;">Test Configuration</button>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>

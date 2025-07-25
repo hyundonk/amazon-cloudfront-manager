@@ -18,6 +18,7 @@ interface CfManagerBackendStackProps extends cdk.StackProps {
   historyTable: dynamodb.Table;
   originsTable: dynamodb.Table;
   lambdaEdgeFunctionsTable: dynamodb.Table;
+  settingsTable: dynamodb.Table;
   customCachePolicy: cloudfront.CachePolicy;
   runtime: 'python' | 'nodejs';
 }
@@ -64,6 +65,7 @@ export class CfManagerBackendStack extends cdk.Stack {
       HISTORY_TABLE: props.historyTable.tableName,
       ORIGINS_TABLE: props.originsTable.tableName,
       LAMBDA_EDGE_FUNCTIONS_TABLE: props.lambdaEdgeFunctionsTable.tableName,
+      SETTINGS_TABLE: props.settingsTable.tableName,
       CUSTOM_CACHE_POLICY_ID: props.customCachePolicy.cachePolicyId,
     };
 
@@ -94,7 +96,9 @@ export class CfManagerBackendStack extends cdk.Stack {
         'cloudfront:CreateOriginAccessControl',
         'cloudfront:DeleteOriginAccessControl',
         'cloudfront:GetOriginAccessControl',
-        'cloudfront:ListOriginAccessControls'
+        'cloudfront:ListOriginAccessControls',
+        // CloudWatch Logs delivery permissions for CloudFront Standard v2 logging
+        'cloudfront:AllowVendedLogDeliveryForResource'
       ],
       resources: ['*']
     }));
@@ -720,6 +724,99 @@ export class CfManagerBackendStack extends cdk.Stack {
     certificateResource.addMethod('GET', new apigateway.LambdaIntegration(getCertificateFunction), {
       authorizer,
       authorizationType: apigateway.AuthorizationType.COGNITO
+    });
+
+    // Settings management Lambda functions
+    const getSettingsFunction = createLambdaFunction(
+      'GetSettingsFunction',
+      'settings/get-settings',
+      'Get application settings',
+      cdk.Duration.seconds(30),
+      256,
+      {
+        SETTINGS_TABLE: props.settingsTable.tableName,
+        AWS_ACCOUNT_ID: this.account
+      }
+    );
+
+    const updateSettingsFunction = createLambdaFunction(
+      'UpdateSettingsFunction',
+      'settings/update-settings',
+      'Update application settings',
+      cdk.Duration.seconds(60),
+      512,
+      {
+        SETTINGS_TABLE: props.settingsTable.tableName,
+        AWS_ACCOUNT_ID: this.account
+      }
+    );
+
+    // Grant DynamoDB permissions for settings functions
+    props.settingsTable.grantReadData(getSettingsFunction);
+    props.settingsTable.grantReadWriteData(updateSettingsFunction);
+
+    // Grant S3 permissions for settings functions (for bucket creation)
+    updateSettingsFunction.addToRolePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: [
+        's3:CreateBucket',
+        's3:HeadBucket',
+        's3:PutBucketPolicy',
+        's3:GetBucketLocation'
+      ],
+      resources: ['*']
+    }));
+
+    // Grant CloudWatch Logs permissions for access logs configuration
+    updateSettingsFunction.addToRolePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'logs:PutDeliveryDestination',
+        'logs:PutDeliveryDestinationPolicy',
+        'logs:PutDeliverySource',
+        'logs:CreateDelivery',
+        'logs:GetDeliveryDestination',
+        'logs:GetDeliverySource',
+        'logs:GetDelivery'
+      ],
+      resources: ['*']
+    }));
+
+    // Create API resources and methods for settings
+    const settingsResource = this.api.root.addResource('settings');
+    const settingResource = settingsResource.addResource('{key}');
+
+    // Configure API methods for settings
+    settingResource.addMethod('GET', new apigateway.LambdaIntegration(getSettingsFunction), {
+      authorizer,
+      authorizationType: apigateway.AuthorizationType.COGNITO
+    });
+
+    settingResource.addMethod('PUT', new apigateway.LambdaIntegration(updateSettingsFunction), {
+      authorizer,
+      authorizationType: apigateway.AuthorizationType.COGNITO
+    });
+
+    // Update distribution creation functions to include settings table access
+    [createDistributionFunction, createDistributionProxyFunction].forEach(func => {
+      if (func) {
+        props.settingsTable.grantReadData(func);
+        
+        // Add CloudWatch Logs permissions for access logs configuration
+        func.addToRolePolicy(new iam.PolicyStatement({
+          effect: iam.Effect.ALLOW,
+          actions: [
+            'logs:PutDeliveryDestination',
+            'logs:PutDeliveryDestinationPolicy',
+            'logs:PutDeliverySource',
+            'logs:CreateDelivery',
+            'logs:GetDeliveryDestination',
+            'logs:GetDeliverySource',
+            'logs:GetDelivery'
+          ],
+          resources: ['*']
+        }));
+      }
     });
 
     // Outputs

@@ -921,6 +921,73 @@ select option[style*="color: red"] {
     gap: 10px;
 }
 
+/* Access Logs Settings */
+.form-help {
+    font-size: 12px;
+    color: var(--text-light);
+    margin-top: 5px;
+    line-height: 1.4;
+}
+
+.access-logs-status {
+    background-color: #f8f9fa;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    padding: 15px;
+    margin-top: 10px;
+}
+
+.status-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+}
+
+.status-item:last-child {
+    margin-bottom: 0;
+}
+
+.status-label {
+    font-weight: 500;
+    color: var(--text-color);
+}
+
+.status-value {
+    color: var(--text-light);
+    font-family: 'Courier New', monospace;
+    font-size: 13px;
+}
+
+.form-actions {
+    display: flex;
+    gap: 10px;
+    margin-top: 20px;
+    padding-top: 15px;
+    border-top: 1px solid var(--border-color);
+}
+
+.form-actions .btn-primary,
+.form-actions .btn-secondary {
+    flex: 1;
+    text-align: center;
+}
+
+/* Status indicators */
+.status-enabled {
+    color: var(--success-color);
+    font-weight: 600;
+}
+
+.status-disabled {
+    color: var(--text-light);
+}
+
+.status-error {
+    color: var(--danger-color);
+    font-weight: 600;
+}
+
 /* Buttons */
 .btn-primary {
     background-color: var(--secondary-color);

@@ -49,6 +49,7 @@ const backendStack = new CfManagerBackendStack(app, 'CfManagerBackendStack', {
   historyTable: coreStack.historyTable,
   originsTable: coreStack.originsTable,
   lambdaEdgeFunctionsTable: coreStack.lambdaEdgeFunctionsTable,
+  settingsTable: coreStack.settingsTable,
   customCachePolicy: coreStack.customCachePolicy,
   runtime: runtime as 'python' | 'nodejs' // Pass runtime to backend stack
 });

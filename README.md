@@ -52,7 +52,14 @@ The CloudFront Manager application consists of the following components:
    - Automatic policy management and distribution tracking
    - One-OAC-per-origin architecture for granular security
 
-6. **CI/CD Pipeline**:
+6. **CloudFront Standard v2 Access Logs**:
+   - Modern CloudWatch Logs-based access logging system
+   - Real-time log delivery with configurable partitioning
+   - Hive-compatible file organization for analytics
+   - Enhanced log fields and structured JSON format
+   - Cost-effective alternative to legacy S3 access logs
+
+7. **CI/CD Pipeline**:
    - CodePipeline for continuous integration and deployment
    - CodeBuild for building and testing the application
    - S3 for artifact storage
@@ -370,6 +377,342 @@ aws acm describe-certificate \
     --region us-east-1 \
     --query 'Certificate.RenewalEligibility'
 ```
+
+## CloudFront Standard v2 Access Logs
+
+The CloudFront Manager includes comprehensive support for CloudFront Standard v2 access logs, providing modern, real-time logging capabilities with enhanced features and cost optimization compared to legacy S3 access logs.
+
+### Overview
+
+CloudFront Standard v2 access logs represent AWS's next-generation logging solution for CloudFront distributions. Unlike legacy S3 access logs that are delivered with delays and limited customization, Standard v2 logs provide real-time delivery to CloudWatch Logs with advanced partitioning and analytics capabilities.
+
+### Architecture
+
+The CloudFront Standard v2 logging system consists of four main components:
+
+```
+┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐    ┌──────────────────┐
+│   CloudFront    │───▶│  Delivery Source │───▶│ Delivery        │───▶│ Delivery         │
+│   Distribution  │    │  (ACCESS_LOGS)   │    │ (Links S&D)     │    │ Destination (S3) │
+└─────────────────┘    └──────────────────┘    └─────────────────┘    └──────────────────┘
+                                                                                │
+                                                                                ▼
+                                                                       ┌──────────────────┐
+                                                                       │ S3 Bucket with   │
+                                                                       │ Hive Partitioning│
+                                                                       └──────────────────┘
+```
+
+#### Components
+
+1. **Delivery Source**: 
+   - Links CloudFront distribution to CloudWatch Logs
+   - Configured with `ACCESS_LOGS` log type
+   - Must be created in `us-east-1` region (CloudFront global service)
+
+2. **Delivery Destination**:
+   - Defines the target S3 bucket for log storage
+   - Supports multiple output formats (JSON, W3C, Raw, Plain, Parquet)
+   - Configured with destination resource ARN
+
+3. **Delivery**:
+   - Links delivery source to delivery destination
+   - Configures Hive-compatible partitioning
+   - Enables real-time log streaming
+
+4. **S3 Storage**:
+   - Stores logs with Hive-compatible directory structure
+   - Supports compression (gzip) for cost optimization
+   - Organized by time-based partitions for efficient querying
+
+### Configuration
+
+#### Automatic Configuration
+
+The CloudFront Manager automatically configures Standard v2 access logs for all new distributions when the consolidated access logs feature is enabled:
+
+1. **Settings Configuration**: Stored in DynamoDB settings table
+   ```json
+   {
+     "settingKey": "consolidated-access-logs",
+     "enabled": true,
+     "bucketName": "consolidated-access-logs-<ACCOUNT-ID>-<SUFFIX>",
+     "bucketRegion": "ap-northeast-1",
+     "outputFormat": "json",
+     "compression": "gzip",
+     "partitioning": {
+       "enabled": true,
+       "pattern": "year={year}/month={month}/day={day}/hour={hour}"
+     }
+   }
+   ```
+
+2. **Automatic Workflow**: When creating a distribution:
+   - ✅ Create delivery destination in `us-east-1`
+   - ✅ Set delivery destination policy for cross-account access
+   - ✅ Create delivery source with CloudFront distribution ARN
+   - ✅ Create delivery with Hive-compatible partitioning
+   - ✅ Enable real-time log streaming
+
+#### Manual Configuration (AWS CLI)
+
+For manual setup or troubleshooting, you can configure Standard v2 logs using AWS CLI:
+
+```bash
+# 1. Create delivery destination
+aws logs put-delivery-destination \
+    --name cloudfront-access-logs-DISTRIBUTION-ID \
+    --output-format json \
+    --delivery-destination-configuration "destinationResourceArn=arn:aws:s3:::bucket-name/cloudfront-logs" \
+    --region us-east-1
+
+# 2. Set delivery destination policy
+aws logs put-delivery-destination-policy \
+    --delivery-destination-name cloudfront-access-logs-DISTRIBUTION-ID \
+    --delivery-destination-policy '{
+        "Version": "2012-10-17",
+        "Statement": [{
+            "Effect": "Allow",
+            "Principal": {"AWS": "arn:aws:iam::ACCOUNT-ID:root"},
+            "Action": "logs:CreateDelivery",
+            "Resource": "arn:aws:logs:us-east-1:ACCOUNT-ID:delivery-destination:cloudfront-access-logs-DISTRIBUTION-ID"
+        }]
+    }' \
+    --region us-east-1
+
+# 3. Create delivery source
+aws logs put-delivery-source \
+    --name cloudfront-DISTRIBUTION-ID \
+    --resource-arn "arn:aws:cloudfront::ACCOUNT-ID:distribution/DISTRIBUTION-ID" \
+    --log-type ACCESS_LOGS \
+    --region us-east-1
+
+# 4. Create delivery with partitioning
+aws logs create-delivery \
+    --delivery-source-name cloudfront-DISTRIBUTION-ID \
+    --delivery-destination-arn "arn:aws:logs:us-east-1:ACCOUNT-ID:delivery-destination:cloudfront-access-logs-DISTRIBUTION-ID" \
+    --s3-delivery-configuration '{
+        "suffixPath": "year={year}/month={month}/day={day}/hour={hour}",
+        "enableHiveCompatiblePath": true
+    }' \
+    --region us-east-1
+```
+
+### Hive-Compatible Partitioning
+
+#### Structure
+
+Standard v2 logs are organized using Hive-compatible partitioning for optimal analytics performance:
+
+```
+s3://consolidated-access-logs-<ACCOUNT-ID>-<SUFFIX>/cloudfront-logs/
+├── year=2025/
+│   └── month=07/
+│       └── day=25/
+│           ├── hour=05/
+│           │   ├── cloudfront-access-logs-E1VGE9H8N1F94M-001.json.gz
+│           │   └── cloudfront-access-logs-E1VGE9H8N1F94M-002.json.gz
+│           └── hour=06/
+│               ├── cloudfront-access-logs-E1VGE9H8N1F94M-003.json.gz
+│               └── cloudfront-access-logs-E1VGE9H8N1F94M-004.json.gz
+```
+
+#### Benefits
+
+1. **Query Performance**: Partition pruning reduces scan costs and improves query speed
+2. **Cost Optimization**: Only scan relevant partitions for time-based queries
+3. **Analytics Integration**: Compatible with Amazon Athena, AWS Glue, and Apache Spark
+4. **Data Management**: Easy to implement lifecycle policies and archiving strategies
+
+#### Example Athena Queries
+
+```sql
+-- Create external table for CloudFront Standard v2 logs
+CREATE EXTERNAL TABLE cloudfront_logs_v2 (
+    timestamp string,
+    c_ip string,
+    sc_status int,
+    cs_method string,
+    cs_uri_stem string,
+    cs_bytes bigint,
+    time_taken double,
+    cs_referer string,
+    cs_user_agent string,
+    cs_cookie string,
+    x_edge_location string,
+    x_edge_request_id string,
+    x_host_header string,
+    cs_protocol string,
+    cs_bytes_sent bigint,
+    time_to_first_byte double,
+    x_edge_detailed_result_type string,
+    sc_content_type string,
+    sc_content_len bigint,
+    sc_range_start bigint,
+    sc_range_end bigint
+)
+PARTITIONED BY (
+    year string,
+    month string,
+    day string,
+    hour string
+)
+STORED AS INPUTFORMAT 'org.apache.hadoop.mapred.TextInputFormat'
+OUTPUTFORMAT 'org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat'
+LOCATION 's3://consolidated-access-logs-<ACCOUNT-ID>-<SUFFIX>/cloudfront-logs/'
+TBLPROPERTIES ('has_encrypted_data'='false');
+
+-- Query logs for specific time range
+SELECT 
+    timestamp,
+    c_ip,
+    sc_status,
+    cs_method,
+    cs_uri_stem,
+    x_edge_location
+FROM cloudfront_logs_v2
+WHERE year = '2025' 
+    AND month = '07' 
+    AND day = '25'
+    AND hour >= '05'
+    AND sc_status >= 400
+ORDER BY timestamp DESC
+LIMIT 100;
+```
+
+### Standard v2 vs Legacy S3 Access Logs Comparison
+
+| Feature | CloudFront Standard v2 Logs | Legacy S3 Access Logs |
+|---------|----------------------------|----------------------|
+| **Delivery Method** | Real-time via CloudWatch Logs | Batch delivery to S3 (15-60 min delay) |
+| **Output Formats** | JSON, W3C, Raw, Plain, Parquet | W3C Extended Log Format only |
+| **Partitioning** | Hive-compatible automatic partitioning | Manual partitioning required |
+| **Cost** | Pay for CloudWatch Logs delivery + S3 storage | Pay for S3 storage only |
+| **Real-time Analytics** | ✅ Immediate availability | ❌ Delayed availability |
+| **Compression** | Built-in gzip compression | Manual compression required |
+| **Analytics Integration** | Native Athena/Glue integration | Manual table creation required |
+| **Customization** | Flexible output formats and partitioning | Limited customization |
+| **Regional Deployment** | Must use us-east-1 for delivery setup | Can use any region |
+| **Management Complexity** | Automated via CloudWatch Logs APIs | Manual S3 bucket management |
+
+### Benefits of Standard v2 Logs
+
+#### 1. **Real-time Insights**
+- Immediate log availability for monitoring and alerting
+- Real-time security analysis and threat detection
+- Instant performance monitoring and optimization
+
+#### 2. **Enhanced Analytics**
+- Structured JSON format for easier parsing
+- Hive-compatible partitioning for efficient querying
+- Native integration with AWS analytics services
+
+#### 3. **Cost Optimization**
+- Automatic compression reduces storage costs
+- Partition pruning minimizes query costs
+- Efficient data organization reduces processing overhead
+
+#### 4. **Operational Simplicity**
+- Automated setup and configuration
+- Centralized log management across distributions
+- Consistent partitioning and formatting
+
+#### 5. **Advanced Features**
+- Multiple output formats for different use cases
+- Configurable partitioning patterns
+- Integration with CloudWatch Logs ecosystem
+
+### Required IAM Permissions
+
+The CloudFront Manager Lambda functions require these additional permissions for Standard v2 logs:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "logs:PutDeliveryDestination",
+        "logs:PutDeliveryDestinationPolicy",
+        "logs:PutDeliverySource",
+        "logs:CreateDelivery",
+        "logs:GetDeliveryDestination",
+        "logs:GetDeliverySource",
+        "logs:GetDelivery",
+        "logs:ListDeliveries",
+        "logs:DeleteDelivery",
+        "logs:DeleteDeliveryDestination",
+        "logs:DeleteDeliverySource"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "cloudfront:AllowVendedLogDeliveryForResource"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
+```
+
+### Troubleshooting
+
+#### Common Issues
+
+1. **Regional Configuration Error**:
+   ```
+   Error: PutDeliverySource action is not supported for this LogType in region ap-northeast-1
+   ```
+   **Solution**: Ensure all CloudWatch Logs operations use `us-east-1` region
+
+2. **Permission Denied**:
+   ```
+   Error: User is not authorized to perform: cloudfront:AllowVendedLogDeliveryForResource
+   ```
+   **Solution**: Add the required CloudFront permission to Lambda execution role
+
+3. **Invalid Output Format**:
+   ```
+   Error: Value 'JSON' at 'outputFormat' failed to satisfy constraint
+   ```
+   **Solution**: Use lowercase format values (`json`, not `JSON`)
+
+4. **Delivery Destination Configuration Error**:
+   ```
+   Error: Unknown parameter in deliveryDestinationConfiguration: "outputFormat"
+   ```
+   **Solution**: Use `outputFormat` as top-level parameter, not in configuration
+
+#### Verification Commands
+
+```bash
+# List delivery destinations
+aws logs describe-delivery-destinations --region us-east-1
+
+# List delivery sources
+aws logs describe-delivery-sources --region us-east-1
+
+# List deliveries
+aws logs describe-deliveries --region us-east-1
+
+# Check S3 bucket contents
+aws s3 ls s3://consolidated-access-logs-<ACCOUNT-ID>-<SUFFIX>/cloudfront-logs/ --recursive
+```
+
+### Migration from Legacy S3 Logs
+
+If you're currently using legacy S3 access logs, consider these migration steps:
+
+1. **Parallel Operation**: Run both logging systems temporarily to validate data
+2. **Analytics Update**: Update Athena tables and queries for new JSON format
+3. **Monitoring Adjustment**: Update dashboards and alerts for real-time data
+4. **Cost Analysis**: Monitor costs during transition period
+5. **Legacy Cleanup**: Disable legacy S3 logs after validation
+
+The CloudFront Manager automatically configures Standard v2 logs for new distributions, providing a modern, efficient, and cost-effective logging solution for your CloudFront infrastructure.
 
 ## Prerequisites
 

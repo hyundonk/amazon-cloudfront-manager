@@ -20,6 +20,13 @@ from aws_clients import (
     get_stepfunctions_client
 )
 
+# Import access logs configuration (local module)
+from configure_access_logs import configure_access_logs_v2
+
+# Import access logs configuration
+sys.path.append('/var/task')
+from configure_access_logs import configure_access_logs_v2
+
 # Configure logging
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -98,6 +105,74 @@ def get_default_distribution_config(name: str, origin_domain: str, origin_path: 
         'HttpVersion': 'http2and3'
     }
 
+def resolve_origin_ids_to_domains(distribution_config: Dict[str, Any], dynamodb) -> Dict[str, Any]:
+    """
+    Resolve origin IDs to proper S3 domain names in distribution configuration
+    
+    Args:
+        distribution_config: CloudFront distribution configuration
+        dynamodb: DynamoDB resource
+        
+    Returns:
+        Updated distribution configuration with resolved domain names
+    """
+    origins_table = os.environ.get('ORIGINS_TABLE')
+    if not origins_table:
+        logger.warning('ORIGINS_TABLE not set, skipping origin ID resolution')
+        return distribution_config
+    
+    origins_tbl = dynamodb.Table(origins_table)
+    
+    # Process each origin in the configuration
+    if 'Origins' in distribution_config and 'Items' in distribution_config['Origins']:
+        for origin in distribution_config['Origins']['Items']:
+            domain_name = origin.get('DomainName', '')
+            
+            # Check if this looks like an origin ID (starts with 'origin-' and doesn't contain dots)
+            if domain_name.startswith('origin-') and '.' not in domain_name:
+                logger.info(f"Resolving origin ID {domain_name} to S3 domain name")
+                
+                try:
+                    # Look up the origin in DynamoDB
+                    origin_response = origins_tbl.get_item(Key={'originId': domain_name})
+                    
+                    if 'Item' in origin_response:
+                        origin_data = origin_response['Item']
+                        bucket_name = origin_data['bucketName']
+                        region = origin_data['region']
+                        
+                        # Construct proper S3 domain name
+                        s3_domain = f"{bucket_name}.s3.{region}.amazonaws.com"
+                        
+                        # Update the origin configuration
+                        origin['DomainName'] = s3_domain
+                        
+                        # Ensure S3OriginConfig is properly set for managed origins
+                        if 'S3OriginConfig' in origin:
+                            # For single-origin distributions, use OAC if available
+                            oac_id = origin_data.get('oacId')
+                            if oac_id:
+                                # OAC is handled by CloudFront automatically when OriginAccessIdentity is empty
+                                origin['S3OriginConfig']['OriginAccessIdentity'] = ''
+                                
+                                # Add OAC configuration
+                                origin['OriginAccessControlId'] = oac_id
+                        
+                        logger.info(f"Resolved origin ID {domain_name} to S3 domain: {s3_domain}")
+                        
+                    else:
+                        logger.error(f"Origin ID {domain_name} not found in origins table")
+                        raise Exception(f"Origin not found: {domain_name}")
+                        
+                except Exception as error:
+                    logger.error(f"Error resolving origin ID {domain_name}: {error}")
+                    raise error
+            else:
+                logger.info(f"Origin domain {domain_name} appears to be already resolved, skipping")
+    
+    return distribution_config
+
+
 def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     """
     Lambda handler to create CloudFront distribution
@@ -167,6 +242,9 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
             distribution_config['Enabled'] = distribution_config.get('Enabled', True)
             distribution_config['Comment'] = distribution_config.get('Comment', name)
             
+            # CRITICAL FIX: Resolve origin IDs to proper S3 domain names
+            distribution_config = resolve_origin_ids_to_domains(distribution_config, dynamodb)
+            
         else:
             # Fallback to simple single-origin configuration
             origin_domain = request_data.get('originDomain', '')
@@ -228,6 +306,17 @@ def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         distributions_tbl.put_item(Item=distribution_record)
         
         logger.info(f"Stored distribution record in DynamoDB: {distribution_id}")
+        
+        # Configure CloudFront Standard v2 logging (access log v2) if enabled
+        try:
+            access_logs_result = configure_access_logs_v2(distribution_id, cloudfront_id)
+            if access_logs_result.get('configured'):
+                logger.info(f"Successfully configured access logs v2 for distribution {distribution_id}")
+            else:
+                logger.info(f"Access logs v2 not configured: {access_logs_result.get('reason', 'Unknown')}")
+        except Exception as access_logs_error:
+            logger.warning(f"Failed to configure access logs v2 for distribution {distribution_id}: {access_logs_error}")
+            # Don't fail the entire distribution creation for access logs issues
         
         # Start status monitoring workflow if Step Functions is configured
         state_machine_arn = os.environ.get('STATUS_MONITOR_STATE_MACHINE_ARN')
@@ -357,6 +446,17 @@ def create_multi_origin_distribution(request_data, name, distribution_id, dynamo
         distributions_tbl.put_item(Item=distribution_record)
         
         logger.info(f"Stored multi-origin distribution record: {distribution_id}")
+        
+        # Configure CloudFront Standard v2 logging (access log v2) if enabled
+        try:
+            access_logs_result = configure_access_logs_v2(distribution_id, cloudfront_id)
+            if access_logs_result.get('configured'):
+                logger.info(f"Successfully configured access logs v2 for multi-origin distribution {distribution_id}")
+            else:
+                logger.info(f"Access logs v2 not configured for multi-origin distribution: {access_logs_result.get('reason', 'Unknown')}")
+        except Exception as access_logs_error:
+            logger.warning(f"Failed to configure access logs v2 for multi-origin distribution {distribution_id}: {access_logs_error}")
+            # Don't fail the entire distribution creation for access logs issues
         
         return cors_response(200, {
             'success': True,

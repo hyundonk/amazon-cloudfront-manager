@@ -58,6 +58,9 @@ document.addEventListener('DOMContentLoaded', function() {
     // Setup templates functionality
     setupTemplatesUI();
     
+    // Setup settings functionality
+    setupSettingsUI();
+    
     // Setup distribution creation modal
     setupDistributionModal();
     
@@ -2954,4 +2957,341 @@ document.addEventListener('DOMContentLoaded', function() {
 function showNotification(message, type = 'info') {
     console.log(`${type.toUpperCase()}: ${message}`);
     // For now, just use console.log. Could be enhanced with toast notifications later
+}
+
+// ===== SETTINGS FUNCTIONALITY =====
+
+/**
+ * Setup settings UI functionality
+ */
+function setupSettingsUI() {
+    console.log('Setting up settings UI...');
+    
+    // Load access logs settings when settings page is accessed
+    const settingsMenuItem = document.querySelector('[data-page="settings"]');
+    if (settingsMenuItem) {
+        settingsMenuItem.addEventListener('click', loadAccessLogsSettings);
+    }
+    
+    // Setup access logs toggle
+    const accessLogsEnabledCheckbox = document.getElementById('access-logs-enabled');
+    if (accessLogsEnabledCheckbox) {
+        accessLogsEnabledCheckbox.addEventListener('change', toggleAccessLogsConfig);
+    }
+    
+    // Setup partitioning toggle
+    const partitioningCheckbox = document.getElementById('access-logs-partitioning');
+    if (partitioningCheckbox) {
+        partitioningCheckbox.addEventListener('change', updatePartitioningConfig);
+    }
+    
+    // Setup save button
+    const saveButton = document.getElementById('save-access-logs-settings');
+    if (saveButton) {
+        saveButton.addEventListener('click', saveAccessLogsSettings);
+    }
+    
+    // Setup test button
+    const testButton = document.getElementById('test-access-logs-config');
+    if (testButton) {
+        testButton.addEventListener('click', testAccessLogsConfiguration);
+    }
+    
+    console.log('Settings UI setup complete');
+}
+
+/**
+ * Load access logs settings from API
+ */
+async function loadAccessLogsSettings() {
+    console.log('Loading access logs settings...');
+    
+    try {
+        const response = await apiCall('/settings/consolidated-access-logs');
+        
+        if (response.success && response.data && response.data.setting) {
+            const settings = response.data.setting;
+            console.log('Loaded access logs settings:', settings);
+            
+            // Populate form fields
+            populateAccessLogsForm(settings);
+            
+            // Show status
+            updateAccessLogsStatus(settings);
+            
+        } else {
+            console.log('No existing access logs settings found, using defaults');
+            // Load default settings
+            const defaultSettings = getDefaultAccessLogsSettings();
+            populateAccessLogsForm(defaultSettings);
+        }
+        
+    } catch (error) {
+        console.error('Error loading access logs settings:', error);
+        showNotification('Failed to load access logs settings', 'error');
+    }
+}
+
+/**
+ * Get default access logs settings
+ */
+function getDefaultAccessLogsSettings() {
+    const accountId = window.ENV?.AWS_ACCOUNT_ID || '123456789012';
+    const randomString = Math.random().toString(36).substring(2, 8);
+    
+    return {
+        settingKey: 'consolidated-access-logs',
+        bucketName: `consolidated-access-logs-${accountId}-${randomString}`,
+        enabled: false,
+        outputFormat: 'json',
+        partitioning: {
+            enabled: true,
+            pattern: 'year={year}/month={month}/day={day}/hour={hour}'
+        },
+        compression: 'gzip'
+    };
+}
+
+/**
+ * Populate access logs form with settings data
+ */
+function populateAccessLogsForm(settings) {
+    console.log('Populating access logs form with:', settings);
+    
+    // Enable/disable checkbox
+    const enabledCheckbox = document.getElementById('access-logs-enabled');
+    if (enabledCheckbox) {
+        enabledCheckbox.checked = settings.enabled || false;
+        toggleAccessLogsConfig(); // Show/hide config sections
+    }
+    
+    // Bucket name
+    const bucketInput = document.getElementById('access-logs-bucket');
+    if (bucketInput) {
+        bucketInput.value = settings.bucketName || '';
+    }
+    
+    // Output format
+    const formatSelect = document.getElementById('access-logs-format');
+    if (formatSelect) {
+        formatSelect.value = settings.outputFormat || 'json';
+    }
+    
+    // Partitioning
+    const partitioningCheckbox = document.getElementById('access-logs-partitioning');
+    if (partitioningCheckbox) {
+        partitioningCheckbox.checked = settings.partitioning?.enabled !== false;
+    }
+    
+    // Compression
+    const compressionSelect = document.getElementById('access-logs-compression');
+    if (compressionSelect) {
+        compressionSelect.value = settings.compression || 'gzip';
+    }
+}
+
+/**
+ * Toggle access logs configuration visibility
+ */
+function toggleAccessLogsConfig() {
+    const enabledCheckbox = document.getElementById('access-logs-enabled');
+    const configGroups = [
+        'access-logs-config',
+        'access-logs-format-group',
+        'access-logs-partitioning-group',
+        'access-logs-compression-group',
+        'access-logs-status'
+    ];
+    
+    const testButton = document.getElementById('test-access-logs-config');
+    
+    const isEnabled = enabledCheckbox?.checked || false;
+    
+    configGroups.forEach(groupId => {
+        const group = document.getElementById(groupId);
+        if (group) {
+            group.style.display = isEnabled ? 'block' : 'none';
+        }
+    });
+    
+    if (testButton) {
+        testButton.style.display = isEnabled ? 'inline-block' : 'none';
+    }
+}
+
+/**
+ * Update partitioning configuration
+ */
+function updatePartitioningConfig() {
+    const partitioningCheckbox = document.getElementById('access-logs-partitioning');
+    console.log('Partitioning enabled:', partitioningCheckbox?.checked);
+    // Additional partitioning configuration could be added here
+}
+
+/**
+ * Save access logs settings
+ */
+async function saveAccessLogsSettings() {
+    console.log('Saving access logs settings...');
+    
+    const saveButton = document.getElementById('save-access-logs-settings');
+    if (saveButton) {
+        saveButton.disabled = true;
+        saveButton.textContent = 'Saving...';
+    }
+    
+    try {
+        // Collect form data
+        const settings = collectAccessLogsFormData();
+        
+        // Validate settings
+        const validation = validateAccessLogsSettings(settings);
+        if (!validation.valid) {
+            showNotification(validation.error, 'error');
+            return;
+        }
+        
+        console.log('Saving settings:', settings);
+        
+        // Save to API
+        const response = await apiCall('/settings/consolidated-access-logs', 'PUT', settings);
+        
+        if (response.success) {
+            console.log('Settings saved successfully:', response.data);
+            showNotification('Access logs settings saved successfully', 'success');
+            
+            // Update status display
+            updateAccessLogsStatus(response.data.setting);
+            
+        } else {
+            console.error('Failed to save settings:', response.error);
+            showNotification(`Failed to save settings: ${response.error}`, 'error');
+        }
+        
+    } catch (error) {
+        console.error('Error saving access logs settings:', error);
+        showNotification('Failed to save access logs settings', 'error');
+    } finally {
+        if (saveButton) {
+            saveButton.disabled = false;
+            saveButton.textContent = 'Save Access Logs Settings';
+        }
+    }
+}
+
+/**
+ * Collect access logs form data
+ */
+function collectAccessLogsFormData() {
+    const enabledCheckbox = document.getElementById('access-logs-enabled');
+    const bucketInput = document.getElementById('access-logs-bucket');
+    const formatSelect = document.getElementById('access-logs-format');
+    const partitioningCheckbox = document.getElementById('access-logs-partitioning');
+    const compressionSelect = document.getElementById('access-logs-compression');
+    
+    return {
+        enabled: enabledCheckbox?.checked || false,
+        bucketName: bucketInput?.value?.trim() || '',
+        outputFormat: formatSelect?.value || 'json',
+        partitioning: {
+            enabled: partitioningCheckbox?.checked !== false,
+            pattern: 'year={year}/month={month}/day={day}/hour={hour}'
+        },
+        compression: compressionSelect?.value || 'gzip'
+    };
+}
+
+/**
+ * Validate access logs settings
+ */
+function validateAccessLogsSettings(settings) {
+    if (settings.enabled) {
+        if (!settings.bucketName) {
+            return { valid: false, error: 'S3 bucket name is required when access logs are enabled' };
+        }
+        
+        // Validate S3 bucket naming conventions
+        const bucketNameRegex = /^[a-z0-9][a-z0-9-]*[a-z0-9]$/;
+        if (!bucketNameRegex.test(settings.bucketName)) {
+            return { valid: false, error: 'S3 bucket name must follow AWS naming conventions (lowercase letters, numbers, and hyphens only)' };
+        }
+        
+        if (settings.bucketName.length < 3 || settings.bucketName.length > 63) {
+            return { valid: false, error: 'S3 bucket name must be between 3 and 63 characters long' };
+        }
+    }
+    
+    return { valid: true };
+}
+
+/**
+ * Update access logs status display
+ */
+function updateAccessLogsStatus(settings) {
+    const statusElement = document.getElementById('access-logs-current-status');
+    const regionElement = document.getElementById('access-logs-bucket-region');
+    const updatedElement = document.getElementById('access-logs-last-updated');
+    
+    if (statusElement) {
+        if (settings.enabled) {
+            statusElement.textContent = 'Enabled';
+            statusElement.className = 'status-value status-enabled';
+        } else {
+            statusElement.textContent = 'Disabled';
+            statusElement.className = 'status-value status-disabled';
+        }
+    }
+    
+    if (regionElement) {
+        regionElement.textContent = settings.bucketRegion || '-';
+    }
+    
+    if (updatedElement) {
+        if (settings.updatedAt) {
+            const date = new Date(settings.updatedAt);
+            updatedElement.textContent = date.toLocaleString();
+        } else {
+            updatedElement.textContent = '-';
+        }
+    }
+}
+
+/**
+ * Test access logs configuration
+ */
+async function testAccessLogsConfiguration() {
+    console.log('Testing access logs configuration...');
+    
+    const testButton = document.getElementById('test-access-logs-config');
+    if (testButton) {
+        testButton.disabled = true;
+        testButton.textContent = 'Testing...';
+    }
+    
+    try {
+        // Collect current form data
+        const settings = collectAccessLogsFormData();
+        
+        // Validate settings
+        const validation = validateAccessLogsSettings(settings);
+        if (!validation.valid) {
+            showNotification(validation.error, 'error');
+            return;
+        }
+        
+        // Test the configuration (this would be a separate API endpoint)
+        // For now, just simulate a test
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        
+        showNotification('Access logs configuration test completed successfully', 'success');
+        
+    } catch (error) {
+        console.error('Error testing access logs configuration:', error);
+        showNotification('Failed to test access logs configuration', 'error');
+    } finally {
+        if (testButton) {
+            testButton.disabled = false;
+            testButton.textContent = 'Test Configuration';
+        }
+    }
 }

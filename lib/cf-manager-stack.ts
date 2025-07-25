@@ -14,6 +14,7 @@ export class CfManagerStack extends cdk.Stack {
   public readonly historyTable: dynamodb.Table;
   public readonly originsTable: dynamodb.Table;
   public readonly lambdaEdgeFunctionsTable: dynamodb.Table;
+  public readonly settingsTable: dynamodb.Table;
   public readonly lambdaExecutionRole: iam.Role;
   public readonly customCachePolicy: cloudfront.CachePolicy;
 
@@ -87,6 +88,15 @@ export class CfManagerStack extends cdk.Stack {
       partitionKey: { name: 'status', type: dynamodb.AttributeType.STRING },
       sortKey: { name: 'createdAt', type: dynamodb.AttributeType.STRING },
       projectionType: dynamodb.ProjectionType.ALL
+    });
+
+    // Settings table for application configuration
+    this.settingsTable = new dynamodb.Table(this, 'SettingsTable', {
+      partitionKey: { name: 'settingKey', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+      pointInTimeRecovery: true,
+      encryption: dynamodb.TableEncryption.AWS_MANAGED,
     });
 
     // Cognito user pool
