@@ -112,6 +112,8 @@ export class CfManagerStack extends cdk.Stack {
         requireUppercase: true,
         requireDigits: true,
         requireSymbols: true,
+        // Set invitation validity period using correct property name and Duration
+        tempPasswordValidity: cdk.Duration.days(14),  // Extended to 14 days for better UX
       },
       accountRecovery: cognito.AccountRecovery.EMAIL_ONLY,
       removalPolicy: cdk.RemovalPolicy.RETAIN,
@@ -119,6 +121,23 @@ export class CfManagerStack extends cdk.Stack {
       deviceTracking: {
         challengeRequiredOnNewDevice: true,
         deviceOnlyRememberedOnUserPrompt: false,
+      },
+      // Customize invitation email
+      userInvitation: {
+        emailSubject: 'Welcome to CloudFront Manager',
+        emailBody: `Hello {username},
+
+You have been invited to use the CloudFront Manager application. 
+
+Your temporary password is: {####}
+
+Please log in at: https://your-cloudfront-domain.cloudfront.net/login.html
+
+This invitation is valid for 14 days. After logging in, you will be prompted to set a new password.
+
+Best regards,
+CloudFront Manager Team`,
+        smsMessage: 'Your CloudFront Manager username is {username} and temporary password is {####}. Valid for 14 days.',
       },
     });
 
