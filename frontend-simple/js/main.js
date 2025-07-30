@@ -924,7 +924,7 @@ function addTemplateActionListeners() {
     });
 }
 
-// Enhanced API call function with permission checks
+// Enhanced API call function with permission checks and token expiration handling
 async function apiCall(endpoint, method = 'GET', data = null) {
     // Check if user has permission for this endpoint
     if (!hasEndpointPermission(endpoint, method)) {
@@ -941,7 +941,7 @@ async function apiCall(endpoint, method = 'GET', data = null) {
         return Promise.reject(error);
     }
     
-    // Get the authentication token
+    // Get the authentication token and check if it's expired
     const idToken = localStorage.getItem('idToken');
     
     if (!idToken) {
@@ -949,6 +949,16 @@ async function apiCall(endpoint, method = 'GET', data = null) {
         return Promise.reject({
             success: false,
             error: 'Not authenticated'
+        });
+    }
+    
+    // Check if token is expired before making API call
+    if (window.groupManager && window.groupManager.isTokenExpired(idToken)) {
+        console.log('Token expired, redirecting to login');
+        window.groupManager.handleTokenExpiration();
+        return Promise.reject({
+            success: false,
+            error: 'Token expired'
         });
     }
     
@@ -1044,12 +1054,16 @@ async function apiCall(endpoint, method = 'GET', data = null) {
                             statusCode: 403
                         });
                     } else if (response.status === 401) {
-                        // Unauthorized - token invalid
-                        console.log('Token invalid, redirecting to login');
-                        redirectToLogin();
+                        // Unauthorized - token invalid or expired
+                        console.log('Token invalid or expired, handling token expiration');
+                        if (window.groupManager) {
+                            window.groupManager.handleTokenExpiration();
+                        } else {
+                            redirectToLogin();
+                        }
                         return Promise.reject({
                             success: false,
-                            error: 'Unauthorized',
+                            error: 'Unauthorized - Session expired',
                             statusCode: 401
                         });
                     }

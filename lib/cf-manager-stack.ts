@@ -115,6 +115,11 @@ export class CfManagerStack extends cdk.Stack {
       },
       accountRecovery: cognito.AccountRecovery.EMAIL_ONLY,
       removalPolicy: cdk.RemovalPolicy.RETAIN,
+      // Optional: Configure device tracking for enhanced security
+      deviceTracking: {
+        challengeRequiredOnNewDevice: true,
+        deviceOnlyRememberedOnUserPrompt: false,
+      },
     });
 
     // Add admin group
@@ -141,9 +146,10 @@ export class CfManagerStack extends cdk.Stack {
         cognito.UserPoolClientIdentityProvider.COGNITO
       ],
       preventUserExistenceErrors: true,
-      refreshTokenValidity: cdk.Duration.days(30),
-      accessTokenValidity: cdk.Duration.hours(1),
-      idTokenValidity: cdk.Duration.hours(1),
+      // Token validity settings for 1-hour re-authentication
+      refreshTokenValidity: cdk.Duration.hours(1),    // 1 hour - Forces re-auth
+      accessTokenValidity: cdk.Duration.minutes(60),  // 1 hour - API access duration
+      idTokenValidity: cdk.Duration.minutes(60),      // 1 hour - User info validity
     });
 
     // Lambda execution role with CloudFront permissions

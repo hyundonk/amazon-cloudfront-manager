@@ -1,6 +1,7 @@
 /**
  * Group Management Utilities for CloudFront Manager
  * Implements simplified two-tier access control: Administrators and Regular Users
+ * Includes token expiration handling for 1-hour re-authentication
  */
 
 class GroupManager {
@@ -8,6 +9,8 @@ class GroupManager {
         this.userGroups = [];
         this.permissions = {};
         this.initialized = false;
+        this.tokenCheckInterval = null;
+        this.lastTokenCheck = null;
     }
     
     /**
@@ -27,6 +30,150 @@ class GroupManager {
             console.error('Error extracting groups from token:', error);
             this.userGroups = [];
             return [];
+        }
+    }
+    
+    /**
+     * Get current ID token from localStorage
+     */
+    getIdToken() {
+        try {
+            const cognitoUser = JSON.parse(localStorage.getItem('CognitoIdentityServiceProvider.7kcjqhqhqhqhqhqhqhqhqh.LastAuthUser') || '{}');
+            const userKey = Object.keys(localStorage).find(key => 
+                key.includes('CognitoIdentityServiceProvider') && 
+                key.includes('idToken')
+            );
+            return userKey ? localStorage.getItem(userKey) : null;
+        } catch (error) {
+            console.error('Error getting ID token:', error);
+            return null;
+        }
+    }
+    
+    /**
+     * Check if token is expired
+     */
+    isTokenExpired(token) {
+        if (!token) return true;
+        
+        try {
+            const payload = JSON.parse(atob(token.split('.')[1]));
+            const currentTime = Math.floor(Date.now() / 1000);
+            
+            // Check if token is expired (exp claim is in seconds)
+            return payload.exp < currentTime;
+        } catch (error) {
+            console.error('Error checking token expiration:', error);
+            return true;
+        }
+    }
+    
+    /**
+     * Handle token expiration - redirect to login
+     */
+    handleTokenExpiration() {
+        console.log('Session expired, redirecting to login');
+        
+        // Clear any stored authentication data
+        this.clearAuthData();
+        
+        // Show user-friendly message
+        if (window.confirm('Your session has expired. You will be redirected to the login page.')) {
+            window.location.href = '/login.html';
+        } else {
+            // Redirect anyway after a short delay
+            setTimeout(() => {
+                window.location.href = '/login.html';
+            }, 2000);
+        }
+    }
+    
+    /**
+     * Clear authentication data from localStorage
+     */
+    clearAuthData() {
+        // Clear Cognito-related localStorage items
+        Object.keys(localStorage).forEach(key => {
+            if (key.includes('CognitoIdentityServiceProvider')) {
+                localStorage.removeItem(key);
+            }
+        });
+        
+        // Clear any application-specific auth data
+        localStorage.removeItem('userGroups');
+        localStorage.removeItem('userPermissions');
+        
+        // Reset internal state
+        this.userGroups = [];
+        this.permissions = {};
+        this.initialized = false;
+    }
+    
+    /**
+     * Check token validity and handle expiration
+     */
+    async checkTokenValidity() {
+        const token = this.getIdToken();
+        
+        if (!token || this.isTokenExpired(token)) {
+            console.log('Token is expired or missing');
+            this.handleTokenExpiration();
+            return false;
+        }
+        
+        // Try to make a test API call to verify token is still valid
+        try {
+            const response = await fetch('/api/distributions', {
+                method: 'GET',
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json'
+                }
+            });
+            
+            if (response.status === 401 || response.status === 403) {
+                console.log('Token validation failed with API call');
+                this.handleTokenExpiration();
+                return false;
+            }
+            
+            this.lastTokenCheck = Date.now();
+            return true;
+        } catch (error) {
+            console.error('Error validating token with API:', error);
+            // Don't redirect on network errors, only on auth errors
+            return true;
+        }
+    }
+    
+    /**
+     * Start periodic token validation
+     */
+    startTokenValidation() {
+        // Check token validity every 5 minutes
+        this.tokenCheckInterval = setInterval(() => {
+            this.checkTokenValidity();
+        }, 5 * 60 * 1000);
+        
+        // Also check on page focus (when user returns to tab)
+        window.addEventListener('focus', () => {
+            // Only check if it's been more than 1 minute since last check
+            if (!this.lastTokenCheck || (Date.now() - this.lastTokenCheck) > 60 * 1000) {
+                this.checkTokenValidity();
+            }
+        });
+        
+        // Check on page load
+        this.checkTokenValidity();
+    }
+    
+    /**
+     * Stop token validation (cleanup)
+     */
+    stopTokenValidation() {
+        if (this.tokenCheckInterval) {
+            clearInterval(this.tokenCheckInterval);
+            this.tokenCheckInterval = null;
         }
     }
     
@@ -397,9 +544,14 @@ function updateNavigationMenu() {
 // Global instance
 window.groupManager = new GroupManager();
 
-// Initialize menu visibility on page load
+// Initialize menu visibility and token validation on page load
 document.addEventListener('DOMContentLoaded', function() {
-    console.log('DOM loaded, initializing group-based menu visibility');
+    console.log('DOM loaded, initializing group-based menu visibility and token validation');
+    
+    // Start token validation for 1-hour re-authentication
+    if (window.groupManager) {
+        window.groupManager.startTokenValidation();
+    }
     
     // Wait for authentication to complete
     setTimeout(() => {
@@ -415,4 +567,11 @@ document.addEventListener('DOMContentLoaded', function() {
             }, 1000);
         }
     }, 1000);
+});
+
+// Cleanup token validation when page is unloaded
+window.addEventListener('beforeunload', function() {
+    if (window.groupManager) {
+        window.groupManager.stopTokenValidation();
+    }
 });
