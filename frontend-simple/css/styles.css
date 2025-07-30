@@ -247,11 +247,11 @@ body {
 
 /* Pages */
 .page {
-    display: none;
+    display: none !important;
 }
 
 .page.active {
-    display: block;
+    display: block !important;
 }
 
 .page-header {

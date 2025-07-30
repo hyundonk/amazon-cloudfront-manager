@@ -1,0 +1,291 @@
+/**
+ * Role-Based Access Control CSS Styles
+ * Supports simplified two-tier access control: Administrators and Regular Users
+ */
+
+/* Role-based styling for user profile */
+.user-role {
+    font-size: 0.8em;
+    padding: 2px 6px;
+    border-radius: 3px;
+    margin-left: 5px;
+    font-weight: 500;
+}
+
+.role-admin {
+    background-color: #dc3545;
+    color: white;
+}
+
+.role-user {
+    background-color: #6c757d;
+    color: white;
+}
+
+/* Admin-only banner for restricted sections */
+.admin-only-banner {
+    background-color: #e3f2fd;
+    border: 1px solid #2196f3;
+    border-radius: 4px;
+    padding: 15px;
+    margin-bottom: 20px;
+    color: #1976d2;
+    font-weight: 500;
+    text-align: center;
+}
+
+.admin-only-banner i {
+    margin-right: 8px;
+    font-size: 1.2em;
+}
+
+/* Restricted access message for non-admin users */
+.restricted-access-message {
+    background-color: #fff3cd;
+    border: 1px solid #ffeaa7;
+    border-radius: 8px;
+    padding: 20px;
+    margin: 20px 0;
+    text-align: center;
+}
+
+.restriction-banner {
+    max-width: 500px;
+    margin: 0 auto;
+}
+
+.restriction-banner i {
+    font-size: 48px;
+    color: #f39c12;
+    margin-bottom: 15px;
+    display: block;
+}
+
+.restriction-banner h3 {
+    color: #e67e22;
+    margin-bottom: 10px;
+    font-size: 1.5em;
+}
+
+.restriction-banner p {
+    color: #8b4513;
+    margin-bottom: 8px;
+    line-height: 1.5;
+}
+
+/* Permission error modal */
+.permission-error-modal {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.5);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 10000;
+}
+
+.permission-error-modal .modal-overlay {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    width: 100%;
+    height: 100%;
+}
+
+.permission-error-modal .modal-content {
+    background: white;
+    padding: 30px;
+    border-radius: 8px;
+    text-align: center;
+    max-width: 400px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+    animation: modalSlideIn 0.3s ease-out;
+}
+
+.permission-error-modal .error-icon {
+    font-size: 48px;
+    margin-bottom: 15px;
+    color: #dc3545;
+}
+
+.permission-error-modal h3 {
+    color: #dc3545;
+    margin-bottom: 15px;
+    font-size: 1.5em;
+}
+
+.permission-error-modal p {
+    color: #666;
+    margin-bottom: 20px;
+    line-height: 1.5;
+}
+
+.permission-error-modal button {
+    background-color: #dc3545;
+    color: white;
+    border: none;
+    padding: 10px 20px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 1em;
+    transition: background-color 0.3s ease;
+}
+
+.permission-error-modal button:hover {
+    background-color: #c82333;
+}
+
+/* Animation for modal */
+@keyframes modalSlideIn {
+    from {
+        opacity: 0;
+        transform: translateY(-50px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* Hidden elements for non-admin users */
+[data-feature="settings"],
+[data-feature="templates"],
+[data-feature="origins"] {
+    display: none; /* Will be shown by JavaScript for admin users */
+}
+
+/* Show distributions only when active */
+[data-feature="distributions"].active {
+    display: block !important;
+}
+
+/* Disabled state for restricted actions */
+.restricted-action {
+    opacity: 0.5;
+    cursor: not-allowed;
+    pointer-events: none;
+}
+
+.restricted-action:hover {
+    opacity: 0.5;
+}
+
+/* Role indicator in navigation */
+.user-profile {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.user-email {
+    font-weight: 500;
+}
+
+/* Sidebar menu item states for role-based visibility */
+.sidebar-menu li[data-feature] {
+    transition: opacity 0.3s ease, transform 0.3s ease;
+}
+
+.sidebar-menu li[data-feature][style*="none"] {
+    opacity: 0;
+    transform: translateX(-20px);
+    pointer-events: none;
+}
+
+/* Loading state for group initialization */
+.group-loading {
+    opacity: 0.7;
+    pointer-events: none;
+}
+
+.group-loading::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 20px;
+    height: 20px;
+    margin: -10px 0 0 -10px;
+    border: 2px solid #f3f3f3;
+    border-top: 2px solid #3498db;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+/* Success state for admin users */
+.admin-access-granted {
+    border-left: 4px solid #28a745;
+    background-color: #d4edda;
+    padding: 10px 15px;
+    margin-bottom: 20px;
+    border-radius: 4px;
+}
+
+.admin-access-granted i {
+    color: #28a745;
+    margin-right: 8px;
+}
+
+/* Responsive design for role indicators */
+@media (max-width: 768px) {
+    .user-role {
+        display: none; /* Hide role indicator on mobile to save space */
+    }
+    
+    .admin-only-banner {
+        padding: 10px;
+        font-size: 0.9em;
+    }
+    
+    .restriction-banner i {
+        font-size: 36px;
+    }
+    
+    .restriction-banner h3 {
+        font-size: 1.2em;
+    }
+    
+    .permission-error-modal .modal-content {
+        margin: 20px;
+        padding: 20px;
+    }
+}
+
+/* High contrast mode support */
+@media (prefers-contrast: high) {
+    .role-admin {
+        background-color: #000;
+        color: #fff;
+        border: 1px solid #fff;
+    }
+    
+    .role-user {
+        background-color: #333;
+        color: #fff;
+        border: 1px solid #fff;
+    }
+    
+    .admin-only-banner {
+        border: 2px solid #000;
+        background-color: #f0f0f0;
+        color: #000;
+    }
+}
+
+/* Print styles - hide role-based elements */
+@media print {
+    .user-role,
+    .admin-only-banner,
+    .restricted-access-message,
+    .permission-error-modal {
+        display: none !important;
+    }
+}

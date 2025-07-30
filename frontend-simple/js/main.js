@@ -1,5 +1,197 @@
 // Global configuration and utility functions
 
+/**
+ * Initialize the application with authentication and group management
+ */
+async function initializeApplication() {
+    try {
+        console.log('Initializing CloudFront Manager application...');
+        
+        // Check authentication first
+        const isAuthenticated = await checkAuthentication();
+        
+        if (isAuthenticated) {
+            // Initialize group manager
+            await window.groupManager.initialize();
+            
+            // Update user profile with role information
+            updateUserProfile();
+            
+            // Initialize features based on permissions
+            initializeFeatures();
+            
+            console.log('Application initialized successfully');
+        } else {
+            console.log('User not authenticated, redirecting to login');
+            redirectToLogin();
+        }
+    } catch (error) {
+        console.error('Failed to initialize application:', error);
+        redirectToLogin();
+    }
+}
+
+/**
+ * Update user profile display with role information
+ */
+function updateUserProfile() {
+    const userEmailSpan = document.querySelector('.user-email');
+    const userRoleSpan = document.querySelector('.user-role');
+    
+    if (userEmailSpan) {
+        // Get user email from token or use default
+        const userId = window.groupManager.getUserId();
+        userEmailSpan.textContent = userId.includes('@') ? userId : 'User';
+    }
+    
+    if (userRoleSpan) {
+        const role = window.groupManager.getPrimaryRole();
+        userRoleSpan.textContent = `(${role.charAt(0).toUpperCase() + role.slice(1)})`;
+        userRoleSpan.className = `user-role role-${role}`;
+        console.log(`Updated user profile with role: ${role}`);
+    }
+}
+
+/**
+ * Initialize features based on user permissions
+ */
+function initializeFeatures() {
+    console.log('Initializing features based on user permissions...');
+    
+    // Always load distributions for all users
+    if (window.groupManager.hasPermission('distributions')) {
+        console.log('User has distributions permission, loading data...');
+        // Load API data now that user is authenticated
+        loadApiData();
+    }
+    
+    // Load admin-only features
+    if (window.groupManager.hasPermission('settings')) {
+        console.log('User has settings permission, initializing settings features...');
+        initializeSettingsFeatures();
+    }
+    
+    if (window.groupManager.hasPermission('templates')) {
+        console.log('User has templates permission, initializing templates features...');
+        // Initialize templates features would go here
+    }
+    
+    if (window.groupManager.hasPermission('origins')) {
+        console.log('User has origins permission, initializing origins features...');
+        // Initialize origins features would go here
+    }
+    
+    // Set up event listeners with permission checks
+    setupPermissionAwareEventListeners();
+}
+
+/**
+ * Initialize settings features for admin users
+ */
+function initializeSettingsFeatures() {
+    // Settings-specific initialization would go here
+    console.log('Settings features initialized for admin user');
+}
+
+/**
+ * Set up event listeners with permission checks
+ */
+function setupPermissionAwareEventListeners() {
+    // Create distribution button
+    const createDistributionBtn = document.getElementById('create-distribution-btn');
+    if (createDistributionBtn) {
+        createDistributionBtn.addEventListener('click', function() {
+            if (window.groupManager.hasPermission('distributions')) {
+                // Open create distribution modal
+                console.log('Opening create distribution modal');
+                window.groupManager.logAccess('distributions', 'create_attempt', true);
+            } else {
+                showPermissionError('You don\'t have permission to create distributions.');
+                window.groupManager.logAccess('distributions', 'create_attempt', false);
+            }
+        });
+    }
+    
+    // Create template button (admin only)
+    const createTemplateBtn = document.getElementById('create-template-btn');
+    if (createTemplateBtn) {
+        createTemplateBtn.addEventListener('click', function() {
+            if (window.groupManager.hasPermission('templates')) {
+                console.log('Opening create template modal');
+                window.groupManager.logAccess('templates', 'create_attempt', true);
+            } else {
+                showPermissionError('You don\'t have permission to create templates.');
+                window.groupManager.logAccess('templates', 'create_attempt', false);
+            }
+        });
+    }
+    
+    // Create origin button (admin only)
+    const createOriginBtn = document.getElementById('create-origin-btn');
+    if (createOriginBtn) {
+        createOriginBtn.addEventListener('click', function() {
+            if (window.groupManager.hasPermission('origins')) {
+                console.log('Opening create origin modal');
+                window.groupManager.logAccess('origins', 'create_attempt', true);
+            } else {
+                showPermissionError('You don\'t have permission to create origins.');
+                window.groupManager.logAccess('origins', 'create_attempt', false);
+            }
+        });
+    }
+}
+
+/**
+ * Enhanced authentication check that returns a promise
+ */
+async function checkAuthentication() {
+    return new Promise((resolve) => {
+        try {
+            const idToken = localStorage.getItem('idToken');
+            const accessToken = localStorage.getItem('accessToken');
+            
+            if (!idToken || !accessToken) {
+                console.log('No tokens found in localStorage');
+                resolve(false);
+                return;
+            }
+            
+            // Basic token validation
+            try {
+                const payload = JSON.parse(atob(idToken.split('.')[1]));
+                const now = Math.floor(Date.now() / 1000);
+                
+                if (payload.exp && payload.exp < now) {
+                    console.log('Token expired');
+                    localStorage.removeItem('idToken');
+                    localStorage.removeItem('accessToken');
+                    resolve(false);
+                    return;
+                }
+                
+                console.log('Authentication check passed');
+                resolve(true);
+            } catch (error) {
+                console.error('Token validation failed:', error);
+                localStorage.removeItem('idToken');
+                localStorage.removeItem('accessToken');
+                resolve(false);
+            }
+        } catch (error) {
+            console.error('Authentication check failed:', error);
+            resolve(false);
+        }
+    });
+}
+
+/**
+ * Redirect to login page
+ */
+function redirectToLogin() {
+    console.log('Redirecting to login page');
+    window.location.href = 'login.html';
+}
+
 // Function to get API URL dynamically
 function getApiUrl() {
     // Get from window.ENV (loaded from env.js)
@@ -20,8 +212,10 @@ function getApiUrl() {
 }
 
 document.addEventListener('DOMContentLoaded', function() {
-    // Check authentication first
-    checkAuthentication();
+    console.log('DOM loaded, initializing application...');
+    
+    // Initialize application
+    initializeApplication();
     
     // Navigation functionality
     const menuItems = document.querySelectorAll('.sidebar-menu li');
@@ -29,6 +223,13 @@ document.addEventListener('DOMContentLoaded', function() {
 
     menuItems.forEach(item => {
         item.addEventListener('click', function() {
+            // Check if user has permission to access this feature
+            const feature = this.getAttribute('data-feature');
+            if (feature && !window.groupManager.hasPermission(feature)) {
+                showPermissionError(`You don't have permission to access ${feature}.`);
+                return;
+            }
+            
             // Remove active class from all menu items
             menuItems.forEach(i => i.classList.remove('active'));
             
@@ -43,14 +244,30 @@ document.addEventListener('DOMContentLoaded', function() {
                     page.classList.add('active');
                 }
             });
+            
+            // Log access for audit
+            window.groupManager.logAccess(feature || 'dashboard', 'view', true);
         });
     });
+
+    // Set default page to distributions (only if no page is currently active)
+    const hasActivePage = Array.from(pages).some(page => page.classList.contains('active'));
+    
+    if (!hasActivePage) {
+        const defaultPage = document.getElementById('distributions-page');
+        const defaultMenuItem = document.querySelector('[data-page="distributions"]');
+        
+        if (defaultPage && defaultMenuItem) {
+            defaultPage.classList.add('active');
+            defaultMenuItem.classList.add('active');
+        }
+    }
 
     // Setup sign out functionality
     setupSignOut();
 
-    // Load API data instead of simulating
-    loadApiData();
+    // Don't load API data automatically - wait for authentication
+    // loadApiData(); // Removed - will be called after authentication
     
     // Setup origins functionality
     setupOriginsUI();
@@ -83,18 +300,6 @@ function setupOriginsUI() {
     const cancelEditOriginBtn = document.getElementById('cancel-edit-origin-btn');
     const updateOriginBtn = document.getElementById('update-origin-btn');
     
-    // Website hosting toggle
-    const enableWebsite = document.getElementById('enable-website');
-    const websiteConfig = document.getElementById('website-config');
-    const editEnableWebsite = document.getElementById('edit-enable-website');
-    const editWebsiteConfig = document.getElementById('edit-website-config');
-    
-    // CORS toggle
-    const enableCors = document.getElementById('enable-cors');
-    const corsConfig = document.getElementById('cors-config');
-    const editEnableCors = document.getElementById('edit-enable-cors');
-    const editCorsConfig = document.getElementById('edit-cors-config');
-    
     if (createOriginBtn) {
         createOriginBtn.addEventListener('click', function() {
             createOriginModal.classList.add('active');
@@ -113,32 +318,6 @@ function setupOriginsUI() {
         });
     }
     
-    // Toggle website configuration visibility
-    if (enableWebsite) {
-        enableWebsite.addEventListener('change', function() {
-            websiteConfig.classList.toggle('hidden', !this.checked);
-        });
-    }
-    
-    if (editEnableWebsite) {
-        editEnableWebsite.addEventListener('change', function() {
-            editWebsiteConfig.classList.toggle('hidden', !this.checked);
-        });
-    }
-    
-    // Toggle CORS configuration visibility
-    if (enableCors) {
-        enableCors.addEventListener('change', function() {
-            corsConfig.classList.toggle('hidden', !this.checked);
-        });
-    }
-    
-    if (editEnableCors) {
-        editEnableCors.addEventListener('change', function() {
-            editCorsConfig.classList.toggle('hidden', !this.checked);
-        });
-    }
-    
     // Add event handler for the Create Origin submit button
     if (createOriginSubmitBtn) {
         createOriginSubmitBtn.addEventListener('click', function() {
@@ -148,8 +327,6 @@ function setupOriginsUI() {
             const name = document.getElementById('origin-name').value;
             const bucketName = document.getElementById('bucket-name').value;
             const region = document.getElementById('bucket-region').value;
-            const isWebsiteEnabled = document.getElementById('enable-website').checked;
-            const enableCors = document.getElementById('enable-cors').checked;
             
             // Validate form
             if (!name || !bucketName) {
@@ -157,50 +334,14 @@ function setupOriginsUI() {
                 return;
             }
             
-            // Prepare website configuration if enabled
-            let websiteConfiguration = null;
-            if (isWebsiteEnabled) {
-                websiteConfiguration = {
-                    IndexDocument: {
-                        Suffix: document.getElementById('index-document').value || 'index.html'
-                    },
-                    ErrorDocument: {
-                        Key: document.getElementById('error-document').value || 'error.html'
-                    }
-                };
-            }
-            
-            // Prepare CORS configuration if enabled
-            let corsConfiguration = null;
-            if (enableCors) {
-                const corsOrigins = document.getElementById('cors-origins').value || '*';
-                const corsOriginsList = corsOrigins === '*' ? ['*'] : corsOrigins.split(',').map(o => o.trim());
-                
-                const corsMethods = [];
-                document.querySelectorAll('input[name="cors-methods"]:checked').forEach(checkbox => {
-                    corsMethods.push(checkbox.value);
-                });
-                
-                corsConfiguration = {
-                    CORSRules: [
-                        {
-                            AllowedOrigins: corsOriginsList,
-                            AllowedMethods: corsMethods.length > 0 ? corsMethods : ['GET', 'HEAD'],
-                            AllowedHeaders: ['*'],
-                            MaxAgeSeconds: 3000
-                        }
-                    ]
-                };
-            }
-            
-            // Prepare origin data
+            // Prepare origin data (website hosting and CORS disabled by default)
             const originData = {
                 name: name,
                 bucketName: bucketName,
                 region: region,
-                isWebsiteEnabled: isWebsiteEnabled,
-                websiteConfiguration: websiteConfiguration,
-                corsConfiguration: corsConfiguration
+                isWebsiteEnabled: false,
+                websiteConfiguration: null,
+                corsConfiguration: null
             };
             
             console.log('Creating origin with data:', originData);
@@ -245,8 +386,6 @@ function setupOriginsUI() {
             
             // Get form values
             const name = document.getElementById('edit-origin-name').value;
-            const isWebsiteEnabled = document.getElementById('edit-enable-website').checked;
-            const enableCors = document.getElementById('edit-enable-cors').checked;
             
             // Validate form
             if (!name) {
@@ -254,48 +393,12 @@ function setupOriginsUI() {
                 return;
             }
             
-            // Prepare website configuration if enabled
-            let websiteConfiguration = null;
-            if (isWebsiteEnabled) {
-                websiteConfiguration = {
-                    IndexDocument: {
-                        Suffix: document.getElementById('edit-index-document').value || 'index.html'
-                    },
-                    ErrorDocument: {
-                        Key: document.getElementById('edit-error-document').value || 'error.html'
-                    }
-                };
-            }
-            
-            // Prepare CORS configuration if enabled
-            let corsConfiguration = null;
-            if (enableCors) {
-                const corsOrigins = document.getElementById('edit-cors-origins').value || '*';
-                const corsOriginsList = corsOrigins === '*' ? ['*'] : corsOrigins.split(',').map(o => o.trim());
-                
-                const corsMethods = [];
-                document.querySelectorAll('input[name="edit-cors-methods"]:checked').forEach(checkbox => {
-                    corsMethods.push(checkbox.value);
-                });
-                
-                corsConfiguration = {
-                    CORSRules: [
-                        {
-                            AllowedOrigins: corsOriginsList,
-                            AllowedMethods: corsMethods.length > 0 ? corsMethods : ['GET', 'HEAD'],
-                            AllowedHeaders: ['*'],
-                            MaxAgeSeconds: 3000
-                        }
-                    ]
-                };
-            }
-            
-            // Prepare update data
+            // Prepare update data (website hosting and CORS disabled by default)
             const updateData = {
                 name: name,
-                isWebsiteEnabled: isWebsiteEnabled,
-                websiteConfiguration: websiteConfiguration,
-                corsConfiguration: corsConfiguration
+                isWebsiteEnabled: false,
+                websiteConfiguration: null,
+                corsConfiguration: null
             };
             
             console.log('Updating origin with data:', updateData);
@@ -349,66 +452,6 @@ function setupOriginsUI() {
             createOriginModal.classList.remove('active');
             editOriginModal.classList.remove('active');
         });
-    });
-}
-
-// Check if user is authenticated
-function checkAuthentication() {
-    // Load environment configuration
-    loadEnvironmentConfig().then(() => {
-        if (!window.ENV) {
-            console.error('Environment configuration not loaded');
-            redirectToLogin();
-            return;
-        }
-        
-        const userPool = new AmazonCognitoIdentity.CognitoUserPool({
-            UserPoolId: window.ENV.USER_POOL_ID,
-            ClientId: window.ENV.USER_POOL_CLIENT_ID
-        });
-        
-        const cognitoUser = userPool.getCurrentUser();
-        
-        if (cognitoUser != null) {
-            cognitoUser.getSession((err, session) => {
-                if (err) {
-                    console.error('Error getting session:', err);
-                    redirectToLogin();
-                    return;
-                }
-                
-                if (session.isValid()) {
-                    // Update UI with user info
-                    cognitoUser.getUserAttributes((err, attributes) => {
-                        if (err) {
-                            console.error('Error getting user attributes:', err);
-                            return;
-                        }
-                        
-                        // Find email attribute
-                        const emailAttribute = attributes.find(attr => attr.Name === 'email');
-                        if (emailAttribute) {
-                            // Update user profile display
-                            const userProfileSpan = document.querySelector('.user-profile span');
-                            if (userProfileSpan) {
-                                userProfileSpan.textContent = emailAttribute.Value;
-                            }
-                        }
-                    });
-                    
-                    // Store tokens for API calls
-                    localStorage.setItem('idToken', session.getIdToken().getJwtToken());
-                    localStorage.setItem('accessToken', session.getAccessToken().getJwtToken());
-                } else {
-                    redirectToLogin();
-                }
-            });
-        } else {
-            redirectToLogin();
-        }
-    }).catch(error => {
-        console.error('Failed to load environment config:', error);
-        redirectToLogin();
     });
 }
 
@@ -471,11 +514,17 @@ function handleSignOut() {
 
 // Function to load data from the API
 function loadApiData() {
-    // Show loading indicators
+    // Show loading indicators for pages user has access to
     document.getElementById('dashboard-page').classList.add('loading');
     document.getElementById('distributions-page').classList.add('loading');
-    document.getElementById('origins-page').classList.add('loading');
-    document.getElementById('templates-page').classList.add('loading');
+    
+    if (window.groupManager.hasPermission('origins:read')) {
+        document.getElementById('origins-page').classList.add('loading');
+    }
+    
+    if (window.groupManager.hasPermission('templates')) {
+        document.getElementById('templates-page').classList.add('loading');
+    }
     
     // Check if we should use mock data
     if (window.USE_MOCK_DATA) {
@@ -489,17 +538,21 @@ function loadApiData() {
             document.getElementById('distributions-page').classList.remove('loading');
         }, 800);
         
-        // Use mock data for origins
-        setTimeout(() => {
-            updateOriginsUI(mockData.origins);
-            document.getElementById('origins-page').classList.remove('loading');
-        }, 900);
+        // Use mock data for origins if user has permission
+        if (window.groupManager.hasPermission('origins:read')) {
+            setTimeout(() => {
+                updateOriginsUI(mockData.origins);
+                document.getElementById('origins-page').classList.remove('loading');
+            }, 900);
+        }
         
-        // Use mock data for templates
-        setTimeout(() => {
-            updateTemplatesUI(mockData.templates);
-            document.getElementById('templates-page').classList.remove('loading');
-        }, 1000);
+        // Use mock data for templates if user has permission
+        if (window.groupManager.hasPermission('templates')) {
+            setTimeout(() => {
+                updateTemplatesUI(mockData.templates);
+                document.getElementById('templates-page').classList.remove('loading');
+            }, 1000);
+        }
         
         return;
     }
@@ -540,39 +593,49 @@ function loadApiData() {
             document.getElementById('distributions-page').classList.remove('loading');
         });
     
-    // Load origins from real API
-    loadOrigins();
+    // Load origins from real API (all users can read origins)
+    if (window.groupManager.hasPermission('origins:read')) {
+        console.log('User has origins:read permission, loading origins data...');
+        loadOrigins();
+    } else {
+        console.log('User does not have origins:read permission, skipping origins load');
+    }
     
-    // Load templates from real API
-    apiCall('/templates')
-        .then(response => {
-            if (response.success) {
-                // Check if response.data contains a templates property
-                if (response.data && Array.isArray(response.data.templates)) {
-                    updateTemplatesUI(response.data.templates);
+    // Load templates from real API (admin only)
+    if (window.groupManager.hasPermission('templates')) {
+        console.log('User has templates permission, loading templates data...');
+        apiCall('/templates')
+            .then(response => {
+                if (response.success) {
+                    // Check if response.data contains a templates property
+                    if (response.data && Array.isArray(response.data.templates)) {
+                        updateTemplatesUI(response.data.templates);
+                    } else {
+                        console.error('Unexpected API response format:', response);
+                        console.error('Expected response.data.templates to be an array, got:', typeof response.data?.templates);
+                        showApiError('templates');
+                        // Fall back to mock data
+                        updateTemplatesUI(mockData.templates);
+                    }
                 } else {
-                    console.error('Unexpected API response format:', response);
-                    console.error('Expected response.data.templates to be an array, got:', typeof response.data?.templates);
+                    console.error('Failed to load templates:', response.error);
                     showApiError('templates');
                     // Fall back to mock data
                     updateTemplatesUI(mockData.templates);
                 }
-            } else {
-                console.error('Failed to load templates:', response.error);
+            })
+            .catch(error => {
+                console.error('API error:', error);
                 showApiError('templates');
                 // Fall back to mock data
                 updateTemplatesUI(mockData.templates);
-            }
-        })
-        .catch(error => {
-            console.error('API error:', error);
-            showApiError('templates');
-            // Fall back to mock data
-            updateTemplatesUI(mockData.templates);
-        })
-        .finally(() => {
-            document.getElementById('templates-page').classList.remove('loading');
-        });
+            })
+            .finally(() => {
+                document.getElementById('templates-page').classList.remove('loading');
+            });
+    } else {
+        console.log('User does not have templates permission, skipping templates load');
+    }
 }
 
 // Update distributions UI with data from API
@@ -861,12 +924,28 @@ function addTemplateActionListeners() {
     });
 }
 
-// Real API call function
-function apiCall(endpoint, method = 'GET', data = null) {
+// Enhanced API call function with permission checks
+async function apiCall(endpoint, method = 'GET', data = null) {
+    // Check if user has permission for this endpoint
+    if (!hasEndpointPermission(endpoint, method)) {
+        const error = {
+            success: false,
+            error: 'Insufficient permissions',
+            statusCode: 403
+        };
+        
+        // Log unauthorized access attempt
+        window.groupManager.logAccess(endpoint, method, false);
+        showPermissionError('You do not have permission to perform this action.');
+        
+        return Promise.reject(error);
+    }
+    
     // Get the authentication token
     const idToken = localStorage.getItem('idToken');
     
     if (!idToken) {
+        redirectToLogin();
         return Promise.reject({
             success: false,
             error: 'Not authenticated'
@@ -879,6 +958,7 @@ function apiCall(endpoint, method = 'GET', data = null) {
     const apiUrl = window.API_URL || getApiUrl();
     
     if (!apiUrl) {
+        document.body.classList.remove('api-loading');
         return Promise.reject({
             success: false,
             error: 'API URL not configured'
@@ -893,97 +973,128 @@ function apiCall(endpoint, method = 'GET', data = null) {
     // Remove trailing slash from API URL if it exists
     const baseUrl = apiUrl.endsWith('/') ? apiUrl.slice(0, -1) : apiUrl;
     
-    // For POST requests, first send an OPTIONS request to handle CORS preflight
-    if (method === 'POST' || method === 'PUT' || method === 'DELETE') {
-        console.log('Sending preflight OPTIONS request for CORS');
+    try {
+        // For POST requests, first send an OPTIONS request to handle CORS preflight
+        if (method === 'POST' || method === 'PUT' || method === 'DELETE') {
+            console.log('Sending preflight OPTIONS request for CORS');
+            
+            // Create a mock request to trigger the OPTIONS preflight
+            fetch(`${baseUrl}${endpoint}`, {
+                method: 'OPTIONS',
+                headers: {
+                    'Origin': window.location.origin,
+                    'Access-Control-Request-Method': method,
+                    'Access-Control-Request-Headers': 'Authorization,Content-Type'
+                }
+            }).catch(error => {
+                // Ignore errors from OPTIONS request, it's expected to fail in some cases
+                console.log('Preflight request completed');
+            });
+        }
         
-        // Create a mock request to trigger the OPTIONS preflight
-        fetch(`${baseUrl}${endpoint}`, {
-            method: 'OPTIONS',
-            headers: {
-                'Origin': window.location.origin,
-                'Access-Control-Request-Method': method,
-                'Access-Control-Request-Headers': 'Authorization,Content-Type'
-            }
-        }).catch(error => {
-            // Ignore errors from OPTIONS request, it's expected to fail in some cases
-            console.log('Preflight request completed');
+        // Add a small delay to ensure OPTIONS request is processed
+        return new Promise(resolve => setTimeout(resolve, 500))
+            .then(() => {
+                return fetch(`${baseUrl}${endpoint}`, {
+                    method: method,
+                    headers: {
+                        'Authorization': `Bearer ${idToken}`,
+                        'Content-Type': 'application/json',
+                        'Origin': window.location.origin
+                    },
+                    body: data ? JSON.stringify(data) : null
+                });
+            })
+            .then(async response => {
+                console.log(`API Response Status: ${response.status} ${response.statusText}`);
+                
+                // Try to get response text first
+                const responseText = await response.text();
+                console.log('Raw API Response:', responseText);
+                
+                // Try to parse as JSON
+                let responseData;
+                try {
+                    responseData = responseText ? JSON.parse(responseText) : {};
+                } catch (parseError) {
+                    console.error('Failed to parse response as JSON:', parseError);
+                    console.error('Response text was:', responseText);
+                    
+                    // Return error with the raw response
+                    return {
+                        success: false,
+                        error: `Invalid JSON response: ${responseText.substring(0, 200)}...`,
+                        status: response.status,
+                        statusText: response.statusText
+                    };
+                }
+                
+                // Check if response was successful
+                if (!response.ok) {
+                    console.error(`API Error ${response.status}:`, responseData);
+                    
+                    // Handle specific error codes
+                    if (response.status === 403) {
+                        // Forbidden - permission denied
+                        showPermissionError('You do not have permission to perform this action.');
+                        window.groupManager.logAccess(endpoint, method, false);
+                        return Promise.reject({
+                            success: false,
+                            error: 'Forbidden',
+                            statusCode: 403
+                        });
+                    } else if (response.status === 401) {
+                        // Unauthorized - token invalid
+                        console.log('Token invalid, redirecting to login');
+                        redirectToLogin();
+                        return Promise.reject({
+                            success: false,
+                            error: 'Unauthorized',
+                            statusCode: 401
+                        });
+                    }
+                    
+                    // Return error response
+                    return {
+                        success: false,
+                        error: responseData.message || responseData.error || `HTTP ${response.status}: ${response.statusText}`,
+                        status: response.status,
+                        details: responseData
+                    };
+                }
+                
+                // Success response
+                // If the API already returns a success/data structure, use it directly
+                // Otherwise, wrap it in our standard format
+                if (responseData && typeof responseData === 'object' && 'success' in responseData) {
+                    return responseData;
+                } else {
+                    return {
+                        success: true,
+                        data: responseData
+                    };
+                }
+            })
+            .catch(error => {
+                console.error('API call error:', error);
+                return {
+                    success: false,
+                    error: error.message || 'Network error occurred'
+                };
+            })
+            .finally(() => {
+                // Hide loading indicator
+                document.body.classList.remove('api-loading');
+            });
+            
+    } catch (error) {
+        console.error('API call setup error:', error);
+        document.body.classList.remove('api-loading');
+        return Promise.reject({
+            success: false,
+            error: error.message || 'Failed to setup API call'
         });
     }
-    
-    // Add a small delay to ensure OPTIONS request is processed
-    return new Promise(resolve => setTimeout(resolve, 500))
-        .then(() => {
-            return fetch(`${baseUrl}${endpoint}`, {
-                method: method,
-                headers: {
-                    'Authorization': `Bearer ${idToken}`,
-                    'Content-Type': 'application/json',
-                    'Origin': window.location.origin
-                },
-                body: data ? JSON.stringify(data) : null
-            });
-        })
-        .then(async response => {
-            console.log(`API Response Status: ${response.status} ${response.statusText}`);
-            
-            // Try to get response text first
-            const responseText = await response.text();
-            console.log('Raw API Response:', responseText);
-            
-            // Try to parse as JSON
-            let responseData;
-            try {
-                responseData = responseText ? JSON.parse(responseText) : {};
-            } catch (parseError) {
-                console.error('Failed to parse response as JSON:', parseError);
-                console.error('Response text was:', responseText);
-                
-                // Return error with the raw response
-                return {
-                    success: false,
-                    error: `Invalid JSON response: ${responseText.substring(0, 200)}...`,
-                    status: response.status,
-                    statusText: response.statusText
-                };
-            }
-            
-            // Check if response was successful
-            if (!response.ok) {
-                console.error(`API Error ${response.status}:`, responseData);
-                
-                // Return error response
-                return {
-                    success: false,
-                    error: responseData.message || responseData.error || `HTTP ${response.status}: ${response.statusText}`,
-                    status: response.status,
-                    details: responseData
-                };
-            }
-            
-            // Success response
-            // If the API already returns a success/data structure, use it directly
-            // Otherwise, wrap it in our standard format
-            if (responseData && typeof responseData === 'object' && 'success' in responseData) {
-                return responseData;
-            } else {
-                return {
-                    success: true,
-                    data: responseData
-                };
-            }
-        })
-        .catch(error => {
-            console.error('API call error:', error);
-            return {
-                success: false,
-                error: error.message || 'Network error occurred'
-            };
-        })
-        .finally(() => {
-            // Hide loading indicator
-            document.body.classList.remove('api-loading');
-        });
 }
 
 // View distribution details
@@ -1231,42 +1342,6 @@ function editOrigin(id) {
                 document.getElementById('edit-origin-name').value = origin.name || '';
                 document.getElementById('edit-bucket-name').value = origin.bucketName || '';
                 document.getElementById('edit-bucket-region').value = origin.region || '';
-                
-                // Set website hosting checkbox
-                const isWebsiteEnabled = origin.isWebsiteEnabled || false;
-                document.getElementById('edit-enable-website').checked = isWebsiteEnabled;
-                
-                // Show/hide website config section
-                document.getElementById('edit-website-config').classList.toggle('hidden', !isWebsiteEnabled);
-                
-                // Populate website config if available
-                if (origin.websiteConfiguration) {
-                    document.getElementById('edit-index-document').value = 
-                        origin.websiteConfiguration.IndexDocument?.Suffix || 'index.html';
-                    document.getElementById('edit-error-document').value = 
-                        origin.websiteConfiguration.ErrorDocument?.Key || 'error.html';
-                }
-                
-                // Set CORS checkbox
-                const hasCors = origin.corsConfiguration && 
-                               origin.corsConfiguration.CORSRules && 
-                               origin.corsConfiguration.CORSRules.length > 0;
-                document.getElementById('edit-enable-cors').checked = hasCors;
-                
-                // Show/hide CORS config section
-                document.getElementById('edit-cors-config').classList.toggle('hidden', !hasCors);
-                
-                // Populate CORS config if available
-                if (hasCors) {
-                    const corsRule = origin.corsConfiguration.CORSRules[0];
-                    document.getElementById('edit-cors-origins').value = 
-                        corsRule.AllowedOrigins.join(',');
-                    
-                    // Check appropriate method checkboxes
-                    document.querySelectorAll('input[name="edit-cors-methods"]').forEach(checkbox => {
-                        checkbox.checked = corsRule.AllowedMethods.includes(checkbox.value);
-                    });
-                }
                 
                 // Show the modal
                 document.getElementById('edit-origin-modal').classList.add('active');
@@ -1825,6 +1900,14 @@ function populateCertificateDropdown(selectId = 'certificate-arn') {
     const select = document.getElementById(selectId);
     if (!select) {
         console.warn(`Certificate dropdown element not found: ${selectId}`);
+        return Promise.resolve();
+    }
+    
+    // Check if user has permission to read certificates
+    if (!window.groupManager.hasPermission('certificates:read')) {
+        console.log(`User does not have certificates:read permission, skipping certificate dropdown: ${selectId}`);
+        select.innerHTML = '<option value="">No SSL Certificate (CloudFront Default)</option>';
+        select.disabled = false;
         return Promise.resolve();
     }
     
@@ -3295,3 +3378,5 @@ async function testAccessLogsConfiguration() {
         }
     }
 }
+
+

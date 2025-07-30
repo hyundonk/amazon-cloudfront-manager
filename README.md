@@ -25,14 +25,17 @@ The CloudFront Manager application consists of the following components:
 1. **Frontend**:
    - Static UI hosted on Amazon S3
    - CloudFront distribution for content delivery
-   - React-based single-page application
+   - Vanilla JavaScript single-page application
+   - **Role-based UI** with Cognito user group integration
+   - **Admin-only menus** for advanced features (Origins, Settings)
 
 2. **Backend**:
    - API Gateway for RESTful API endpoints
    - Lambda functions for CloudFront management operations
    - DynamoDB tables for storing distribution configurations and templates
    - Step Functions for handling long-running operations
-   - Cognito User Pool for authentication and authorization
+   - **Cognito User Pool with Groups** for authentication and role-based authorization
+   - **Enhanced API Gateway Authorizer** with user group validation
 
 3. **Status Monitoring System**:
    - Automated CloudFront distribution status tracking
@@ -59,10 +62,86 @@ The CloudFront Manager application consists of the following components:
    - Enhanced log fields and structured JSON format
    - Cost-effective alternative to legacy S3 access logs
 
-7. **CI/CD Pipeline**:
+7. **Settings Management**:
+   - CloudFront Standard v2 access logs configuration
+   - Consolidated access logs with S3 bucket management
+   - Admin-only settings interface
+   - Real-time configuration updates
+
+8. **CI/CD Pipeline**:
    - CodePipeline for continuous integration and deployment
    - CodeBuild for building and testing the application
    - S3 for artifact storage
+
+## Role-Based Access Control
+
+The CloudFront Manager implements a comprehensive role-based access control system using AWS Cognito User Groups to provide different levels of access to application features.
+
+### User Roles
+
+#### **Regular Users**
+- **Access**: Distributions page only
+- **Permissions**: 
+  - View CloudFront distributions
+  - Create new distributions
+  - Update existing distributions
+  - Delete distributions
+  - View distribution status and details
+- **UI Elements**: Only the Distributions menu is visible
+
+#### **Administrators**
+- **Access**: All application features
+- **Permissions**: All regular user permissions plus:
+  - Manage S3 origins (create, update, delete)
+  - Configure application settings
+  - Manage CloudFront Standard v2 access logs
+  - Access to certificates API (read-only)
+- **UI Elements**: All menus visible (Distributions, Origins, Settings)
+
+### Implementation Details
+
+#### **Frontend Role Management**
+- **Dynamic Menu Visibility**: Admin-only menus are hidden by default and shown based on user group membership
+- **Real-time Role Detection**: User roles are determined from Cognito JWT tokens
+- **Permission Checking**: Each UI action validates user permissions before execution
+- **Visual Indicators**: User role is displayed in the header (Admin/User)
+
+#### **Backend Authorization**
+- **API Gateway Authorizer**: Enhanced authorizer validates user group membership
+- **Endpoint Protection**: Admin-only endpoints return 403 for non-admin users
+- **Group-based Permissions**: Different permission sets for different user groups
+
+#### **Cognito User Groups**
+- **Administrators Group**: Users with full application access
+- **Default Behavior**: Users not in Administrators group have regular user access
+- **Group Management**: Administrators can be added/removed via AWS Cognito console or CLI
+
+### Setting Up User Roles
+
+#### **Adding an Administrator**
+```bash
+# Add user to Administrators group
+aws cognito-idp admin-add-user-to-group \
+    --user-pool-id YOUR_USER_POOL_ID \
+    --username user@example.com \
+    --group-name Administrators
+```
+
+#### **Removing Administrator Access**
+```bash
+# Remove user from Administrators group
+aws cognito-idp admin-remove-user-from-group \
+    --user-pool-id YOUR_USER_POOL_ID \
+    --username user@example.com \
+    --group-name Administrators
+```
+
+### Security Features
+
+- **Principle of Least Privilege**: Users only see and can access features appropriate to their role
+- **Server-side Validation**: All permissions are validated on the backend, not just the frontend
+- **Audit Logging**: User actions are logged with role information for compliance
+- **Session Management**: Role information is refreshed with each API call
 
 ## Project Structure
 
@@ -74,17 +153,31 @@ cf-manager-cdk/
 │   ├── cf-manager-frontend-stack.ts    # Frontend stack
 │   ├── cf-manager-backend-stack.ts     # Backend stack
 │   ├── cf-manager-status-monitor-stack.ts # Status monitoring stack
+│   ├── cf-manager-settings-stack.ts    # Settings management stack
 │   └── cf-manager-pipeline-stack.ts    # CI/CD pipeline stack
-├── functions/              # Lambda function code
+├── functions/              # Lambda function code (Node.js)
 │   ├── distributions/      # Distribution management functions
 │   ├── templates/          # Template management functions
 │   ├── origins/            # S3 origins management functions (with OAC)
 │   ├── certificates/       # SSL certificate management functions
+│   ├── settings/           # Settings management functions
+│   └── common/             # Shared utility functions
+├── functions-python/       # Lambda function code (Python - recommended)
+│   ├── distributions/      # Distribution management functions
+│   ├── templates/          # Template management functions
+│   ├── origins/            # S3 origins management functions (with OAC)
+│   ├── certificates/       # SSL certificate management functions
+│   ├── settings/           # Settings management functions
 │   └── common/             # Shared utility functions
 ├── frontend-simple/        # Frontend application
 │   ├── index.html          # Main HTML file
+│   ├── login.html          # Login page with Cognito integration
 │   ├── js/                 # JavaScript files
+│   │   ├── main.js         # Main application logic
+│   │   └── group-utils.js  # Cognito user group management
 │   ├── css/                # Stylesheets
+│   │   ├── styles.css      # Main application styles
+│   │   └── role-based.css  # Role-based UI styling
 │   └── deploy.sh           # Frontend deployment script
 ├── test/                   # Tests for the CDK stacks
 └── cdk.json                # CDK configuration
@@ -2054,35 +2147,37 @@ The following fields are optional but recommended:
 
 ## S3 Origins Management
 
-The CloudFront Manager includes a dedicated Origins management system that allows users to create, view, update, and delete S3 buckets that serve as origins for CloudFront distributions.
+The CloudFront Manager includes a dedicated Origins management system that allows administrators to create, view, update, and delete S3 buckets that serve as origins for CloudFront distributions.
 
 ### Overview
 
-The S3 Origins management feature provides a user-friendly interface for managing S3 buckets specifically configured for use with CloudFront. This simplifies the process of creating properly configured origins for your distributions.
+The S3 Origins management feature provides a secure, user-friendly interface for managing S3 buckets specifically configured for use with CloudFront. This system follows AWS security best practices by creating private buckets with Origin Access Control (OAC).
 
 ### Features
 
-1. **Create S3 Origins**:
-   - Create new S3 buckets with proper configurations for CloudFront
-   - Enable website hosting with custom index and error documents
-   - Configure CORS settings for cross-origin requests
-   - Set appropriate bucket policies for public access
+1. **Create Secure S3 Origins**:
+   - Create new S3 buckets with secure configurations for CloudFront
+   - **Private buckets only** - No public access or website hosting
+   - **Automatic OAC creation** - Each origin gets a dedicated Origin Access Control
+   - **Secure bucket policies** - Restricts access to CloudFront only
 
 2. **Manage Existing Origins**:
    - View a list of all S3 origins created through the application
-   - Update origin configurations including website hosting and CORS settings
+   - Update origin configurations (name only - security settings are fixed)
    - Delete origins and their associated S3 buckets when no longer needed
+   - **Admin-only access** - Only administrators can manage origins
 
 3. **Integration with Distributions**:
    - Use managed origins when creating new CloudFront distributions
-   - Ensure consistent configuration across your CDN infrastructure
+   - Automatic OAC association with distributions
+   - Consistent security configuration across your CDN infrastructure
 
 ### How It Works
 
-1. **Origin Creation**:
-   - User provides a name, bucket name, and region
-   - User configures optional settings like website hosting and CORS
-   - System creates the S3 bucket with the specified configuration
+1. **Origin Creation** (Admin Only):
+   - Administrator provides a name, bucket name, and region
+   - System creates a private S3 bucket with secure configuration
+   - Automatic OAC creation for the specific bucket
    - Origin details are stored in DynamoDB for future reference
 
 2. **Origin Management**:
@@ -2098,8 +2193,7 @@ The S3 Origins management feature provides a user-friendly interface for managin
      - Name (display name)
      - Bucket name
      - Region
-     - Website configuration
-     - CORS configuration
+     - OAC ID (Origin Access Control identifier)
      - Creation and modification timestamps
 
 ### Benefits
@@ -2930,6 +3024,20 @@ The application currently uses **build-time configuration** where the `deploy.sh
 - ✅ Check `edgelambda.amazonaws.com` invoke permission exists
 - ✅ Validate dual service principal trust policy
 - ✅ Use versioned ARN in CloudFront association
+
+## Troubleshooting
+
+### CSS Issues
+
+For CSS-related problems, especially navigation and page visibility issues, refer to the comprehensive troubleshooting guide:
+
+- **[CSS_TROUBLESHOOTING.md](CSS_TROUBLESHOOTING.md)** - Detailed guide for debugging CSS specificity conflicts, page navigation issues, and role-based styling problems
+
+### Common Issues
+
+1. **Page Navigation Not Working**: Check for CSS specificity conflicts between general page rules and role-based rules
+2. **Admin Menus Not Showing**: Verify user is in the Administrators Cognito group
+3. **Create Origin Button Not Working**: Ensure all required HTML elements exist and JavaScript isn't referencing deleted elements
 
 ## LICENSE
 

@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>CloudFront Manager</title>
     <link rel="stylesheet" href="css/styles.css">
+    <link rel="stylesheet" href="css/role-based.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
     
     <!-- AWS SDK and Amplify Libraries -->
@@ -21,10 +22,10 @@
             </div>
             <ul class="sidebar-menu">
                 <li data-page="dashboard"><i class="fas fa-tachometer-alt"></i> Dashboard</li>
-                <li data-page="distributions"><i class="fas fa-sitemap"></i> Distributions</li>
-                <li data-page="origins"><i class="fas fa-database"></i> Origins</li>
-                <li data-page="templates"><i class="fas fa-copy"></i> Templates</li>
-                <li data-page="settings"><i class="fas fa-cog"></i> Settings</li>
+                <li data-page="distributions" data-feature="distributions"><i class="fas fa-sitemap"></i> Distributions</li>
+                <li data-page="origins" data-feature="origins" style="display: none;"><i class="fas fa-database"></i> Origins</li>
+                <li data-page="templates" data-feature="templates" style="display: none;"><i class="fas fa-copy"></i> Templates</li>
+                <li data-page="settings" data-feature="settings" style="display: none;"><i class="fas fa-cog"></i> Settings</li>
             </ul>
             <div class="sidebar-footer">
                 <span>Gaming Developer Tools</span>
@@ -46,7 +47,8 @@
                     </span>
                     <div class="user-profile">
                         <img src="img/user-avatar.png" alt="User" onerror="this.src='img/default-avatar.png'">
-                        <span>Game Developer</span>
+                        <span class="user-email">Game Developer</span>
+                        <span class="user-role role-user">(User)</span>
                         <i class="fas fa-chevron-down"></i>
                         <div class="user-dropdown">
                             <ul>
@@ -73,7 +75,7 @@
                                 <p class="stat-number">12</p>
                             </div>
                         </div>
-                        <div class="stat-card">
+                        <div class="stat-card" style="display: none;">
                             <div class="stat-icon green">
                                 <i class="fas fa-copy"></i>
                             </div>
@@ -143,7 +145,7 @@
                 </div>
 
                 <!-- Distributions Page -->
-                <div class="page" id="distributions-page">
+                <div class="page" id="distributions-page" data-feature="distributions" style="display: none;">
                     <div class="page-header">
                         <h1>CloudFront Distributions</h1>
                         <button class="btn-primary" id="create-distribution-btn">
@@ -227,7 +229,11 @@
                 </div>
 
                 <!-- Origins Page -->
-                <div class="page" id="origins-page">
+                <div class="page" id="origins-page" data-feature="origins" style="display: none;">
+                    <div class="admin-only-banner">
+                        <i class="fas fa-shield-alt"></i>
+                        Administrator Access Required
+                    </div>
                     <div class="page-header">
                         <h1>S3 Origins</h1>
                         <button class="btn-primary" id="create-origin-btn">
@@ -276,10 +282,14 @@
                 </div>
 
                 <!-- Templates Page -->
-                <div class="page" id="templates-page">
+                <div class="page" id="templates-page" data-feature="templates" style="display: none;">
+                    <div class="admin-only-banner">
+                        <i class="fas fa-shield-alt"></i>
+                        Administrator Access Required
+                    </div>
                     <div class="page-header">
                         <h1>Distribution Templates</h1>
-                        <button class="btn-primary">
+                        <button class="btn-primary" id="create-template-btn">
                             <i class="fas fa-plus"></i> Create Template
                         </button>
                     </div>
@@ -339,10 +349,14 @@
                 </div>
 
                 <!-- Settings Page -->
-                <div class="page" id="settings-page">
+                <div class="page" id="settings-page" data-feature="settings" style="display: none;">
+                    <div class="admin-only-banner">
+                        <i class="fas fa-shield-alt"></i>
+                        Administrator Access Required
+                    </div>
                     <h1>Settings</h1>
                     <div class="settings-container">
-                        <div class="settings-section">
+                        <div class="settings-section" style="display: none;">
                             <h2>Account Settings</h2>
                             <div class="settings-form">
                                 <div class="form-group">
@@ -361,7 +375,7 @@
                             </div>
                         </div>
 
-                        <div class="settings-section">
+                        <div class="settings-section" style="display: none;">
                             <h2>Notification Preferences</h2>
                             <div class="settings-form">
                                 <div class="form-check">
@@ -384,7 +398,7 @@
                             </div>
                         </div>
 
-                        <div class="settings-section">
+                        <div class="settings-section" style="display: none;">
                             <h2>API Keys</h2>
                             <div class="api-key-container">
                                 <div class="api-key">
@@ -698,41 +712,6 @@
                         <option value="ap-southeast-2">Asia Pacific (Sydney)</option>
                     </select>
                 </div>
-                <div class="form-check">
-                    <input type="checkbox" id="enable-website" checked>
-                    <label for="enable-website">Enable Website Hosting</label>
-                </div>
-                <div id="website-config" class="nested-form">
-                    <div class="form-group">
-                        <label>Index Document</label>
-                        <input type="text" id="index-document" value="index.html">
-                    </div>
-                    <div class="form-group">
-                        <label>Error Document</label>
-                        <input type="text" id="error-document" value="error.html">
-                    </div>
-                </div>
-                <div class="form-check">
-                    <input type="checkbox" id="enable-cors">
-                    <label for="enable-cors">Enable CORS</label>
-                </div>
-                <div id="cors-config" class="nested-form hidden">
-                    <div class="form-group">
-                        <label>Allowed Origins</label>
-                        <input type="text" id="cors-origins" value="*">
-                        <small>Use * for all origins or comma-separated list</small>
-                    </div>
-                    <div class="form-group">
-                        <label>Allowed Methods</label>
-                        <div class="checkbox-group">
-                            <label><input type="checkbox" name="cors-methods" value="GET" checked> GET</label>
-                            <label><input type="checkbox" name="cors-methods" value="HEAD" checked> HEAD</label>
-                            <label><input type="checkbox" name="cors-methods" value="PUT"> PUT</label>
-                            <label><input type="checkbox" name="cors-methods" value="POST"> POST</label>
-                            <label><input type="checkbox" name="cors-methods" value="DELETE"> DELETE</label>
-                        </div>
-                    </div>
-                </div>
             </div>
             <div class="modal-footer">
                 <button class="btn-secondary" id="cancel-origin-btn">Cancel</button>
@@ -763,41 +742,6 @@
                     <label>Region</label>
                     <input type="text" id="edit-bucket-region" disabled>
                     <small>Region cannot be changed after creation</small>
-                </div>
-                <div class="form-check">
-                    <input type="checkbox" id="edit-enable-website">
-                    <label for="edit-enable-website">Enable Website Hosting</label>
-                </div>
-                <div id="edit-website-config" class="nested-form">
-                    <div class="form-group">
-                        <label>Index Document</label>
-                        <input type="text" id="edit-index-document" value="index.html">
-                    </div>
-                    <div class="form-group">
-                        <label>Error Document</label>
-                        <input type="text" id="edit-error-document" value="error.html">
-                    </div>
-                </div>
-                <div class="form-check">
-                    <input type="checkbox" id="edit-enable-cors">
-                    <label for="edit-enable-cors">Enable CORS</label>
-                </div>
-                <div id="edit-cors-config" class="nested-form hidden">
-                    <div class="form-group">
-                        <label>Allowed Origins</label>
-                        <input type="text" id="edit-cors-origins" value="*">
-                        <small>Use * for all origins or comma-separated list</small>
-                    </div>
-                    <div class="form-group">
-                        <label>Allowed Methods</label>
-                        <div class="checkbox-group">
-                            <label><input type="checkbox" name="edit-cors-methods" value="GET" checked> GET</label>
-                            <label><input type="checkbox" name="edit-cors-methods" value="HEAD" checked> HEAD</label>
-                            <label><input type="checkbox" name="edit-cors-methods" value="PUT"> PUT</label>
-                            <label><input type="checkbox" name="edit-cors-methods" value="POST"> POST</label>
-                            <label><input type="checkbox" name="edit-cors-methods" value="DELETE"> DELETE</label>
-                        </div>
-                    </div>
                 </div>
             </div>
             <div class="modal-footer">
@@ -889,6 +833,7 @@
         console.log('Configuration loaded from env.js:', window.ENV);
     </script>
     <script src="js/api-fallback.js"></script>
+    <script src="js/group-utils.js"></script>
     <script src="js/main.js"></script>
 </body>
 </html>

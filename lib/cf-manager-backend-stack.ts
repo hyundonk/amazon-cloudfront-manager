@@ -52,11 +52,55 @@ export class CfManagerBackendStack extends cdk.Stack {
       }
     });
 
-    // Cognito authorizer
-    const authorizer = new apigateway.CognitoUserPoolsAuthorizer(this, 'CfManagerAuthorizer', {
+    // Cognito authorizer (basic authentication)
+    const cognitoAuthorizer = new apigateway.CognitoUserPoolsAuthorizer(this, 'CfManagerAuthorizer', {
       cognitoUserPools: [props.userPool],
       identitySource: 'method.request.header.Authorization'
     });
+
+    // Enhanced Lambda authorizer for group-based access control
+    const enhancedAuthorizerFunction = new lambda.Function(this, 'EnhancedAuthorizerFunction', {
+      runtime: lambda.Runtime.PYTHON_3_9,
+      handler: 'enhanced-authorizer.lambda_handler',
+      code: lambda.Code.fromAsset(path.join(__dirname, '../functions/common'), {
+        bundling: {
+          image: lambda.Runtime.PYTHON_3_9.bundlingImage,
+          command: [
+            'bash', '-c',
+            'pip install -r requirements.txt -t /asset-output && cp -au . /asset-output'
+          ],
+        },
+      }),
+      description: 'Enhanced authorizer with group-based access control',
+      timeout: cdk.Duration.seconds(30),
+      environment: {
+        USER_POOL_ID: props.userPool.userPoolId,
+        REGION: this.region
+      }
+    });
+
+    // Grant permissions to the enhanced authorizer
+    enhancedAuthorizerFunction.addToRolePolicy(new iam.PolicyStatement({
+      effect: iam.Effect.ALLOW,
+      actions: [
+        'cognito-idp:GetUser',
+        'cognito-idp:AdminGetUser',
+        'logs:CreateLogGroup',
+        'logs:CreateLogStream',
+        'logs:PutLogEvents'
+      ],
+      resources: ['*']
+    }));
+
+    // Create Lambda authorizer
+    const enhancedAuthorizer = new apigateway.TokenAuthorizer(this, 'EnhancedTokenAuthorizer', {
+      handler: enhancedAuthorizerFunction,
+      identitySource: 'method.request.header.Authorization',
+      resultsCacheTtl: cdk.Duration.seconds(0)  // Disable caching to prevent 403 errors from stale cache
+    });
+
+    // Use enhanced authorizer for admin-only endpoints, cognito for others
+    const authorizer = cognitoAuthorizer; // Default to Cognito for now
 
     // Common Lambda environment variables
     const lambdaEnv = {
@@ -596,31 +640,31 @@ export class CfManagerBackendStack extends cdk.Stack {
       authorizationType: apigateway.AuthorizationType.COGNITO
     });
     
-    // Configure API methods for templates
+    // Configure API methods for templates (admin-only with enhanced authorization)
     templatesResource.addMethod('GET', new apigateway.LambdaIntegration(listTemplatesFunction), {
-      authorizer,
-      authorizationType: apigateway.AuthorizationType.COGNITO
+      authorizer: enhancedAuthorizer,
+      authorizationType: apigateway.AuthorizationType.CUSTOM
     });
 
     // Use the proxy function for POST method to handle CORS properly
     templatesResource.addMethod('POST', new apigateway.LambdaIntegration(createTemplateProxyFunction), {
-      authorizer,
-      authorizationType: apigateway.AuthorizationType.COGNITO
+      authorizer: enhancedAuthorizer,
+      authorizationType: apigateway.AuthorizationType.CUSTOM
     });
 
     templateResource.addMethod('GET', new apigateway.LambdaIntegration(getTemplateFunction), {
-      authorizer,
-      authorizationType: apigateway.AuthorizationType.COGNITO
+      authorizer: enhancedAuthorizer,
+      authorizationType: apigateway.AuthorizationType.CUSTOM
     });
 
     templateResource.addMethod('PUT', new apigateway.LambdaIntegration(updateTemplateFunction), {
-      authorizer,
-      authorizationType: apigateway.AuthorizationType.COGNITO
+      authorizer: enhancedAuthorizer,
+      authorizationType: apigateway.AuthorizationType.CUSTOM
     });
 
     templateResource.addMethod('DELETE', new apigateway.LambdaIntegration(deleteTemplateFunction), {
-      authorizer,
-      authorizationType: apigateway.AuthorizationType.COGNITO
+      authorizer: enhancedAuthorizer,
+      authorizationType: apigateway.AuthorizationType.CUSTOM
     });
 
     templateApplyResource.addMethod('POST', new apigateway.LambdaIntegration(applyTemplateFunction), {
@@ -664,30 +708,30 @@ export class CfManagerBackendStack extends cdk.Stack {
     const originsResource = this.api.root.addResource('origins');
     const originResource = originsResource.addResource('{id}');
 
-    // Configure API methods for origins
+    // Configure API methods for origins (admin-only with enhanced authorization)
     originsResource.addMethod('GET', new apigateway.LambdaIntegration(listOriginsFunction), {
-      authorizer,
-      authorizationType: apigateway.AuthorizationType.COGNITO
+      authorizer: enhancedAuthorizer,
+      authorizationType: apigateway.AuthorizationType.CUSTOM
     });
 
     originsResource.addMethod('POST', new apigateway.LambdaIntegration(createOriginFunction), {
-      authorizer,
-      authorizationType: apigateway.AuthorizationType.COGNITO
+      authorizer: enhancedAuthorizer,
+      authorizationType: apigateway.AuthorizationType.CUSTOM
     });
 
     originResource.addMethod('GET', new apigateway.LambdaIntegration(getOriginFunction), {
-      authorizer,
-      authorizationType: apigateway.AuthorizationType.COGNITO
+      authorizer: enhancedAuthorizer,
+      authorizationType: apigateway.AuthorizationType.CUSTOM
     });
 
     originResource.addMethod('PUT', new apigateway.LambdaIntegration(updateOriginFunction), {
-      authorizer,
-      authorizationType: apigateway.AuthorizationType.COGNITO
+      authorizer: enhancedAuthorizer,
+      authorizationType: apigateway.AuthorizationType.CUSTOM
     });
 
     originResource.addMethod('DELETE', new apigateway.LambdaIntegration(deleteOriginFunction), {
-      authorizer,
-      authorizationType: apigateway.AuthorizationType.COGNITO
+      authorizer: enhancedAuthorizer,
+      authorizationType: apigateway.AuthorizationType.CUSTOM
     });
 
     // Configure API methods for Lambda@Edge functions
@@ -715,41 +759,45 @@ export class CfManagerBackendStack extends cdk.Stack {
     const certificatesResource = this.api.root.addResource('certificates');
     const certificateResource = certificatesResource.addResource('{arn}');
 
-    // Configure API methods for certificates
+    // Configure API methods for certificates (admin-only with enhanced authorization)
     certificatesResource.addMethod('GET', new apigateway.LambdaIntegration(listCertificatesFunction), {
-      authorizer,
-      authorizationType: apigateway.AuthorizationType.COGNITO
+      authorizer: enhancedAuthorizer,
+      authorizationType: apigateway.AuthorizationType.CUSTOM
     });
 
     certificateResource.addMethod('GET', new apigateway.LambdaIntegration(getCertificateFunction), {
-      authorizer,
-      authorizationType: apigateway.AuthorizationType.COGNITO
+      authorizer: enhancedAuthorizer,
+      authorizationType: apigateway.AuthorizationType.CUSTOM
     });
 
-    // Settings management Lambda functions
-    const getSettingsFunction = createLambdaFunction(
-      'GetSettingsFunction',
-      'settings/get-settings',
-      'Get application settings',
-      cdk.Duration.seconds(30),
-      256,
-      {
+    // Settings management Lambda functions with enhanced security
+    const getSettingsFunction = new lambda.Function(this, 'GetSettingsFunction', {
+      runtime: lambda.Runtime.PYTHON_3_9,
+      handler: 'enhanced-get-settings.lambda_handler',
+      code: lambda.Code.fromAsset(path.join(__dirname, '../functions/settings')),
+      description: 'Get application settings with admin group validation',
+      timeout: cdk.Duration.seconds(30),
+      memorySize: 256,
+      environment: {
         SETTINGS_TABLE: props.settingsTable.tableName,
-        AWS_ACCOUNT_ID: this.account
+        AWS_ACCOUNT_ID: this.account,
+        DEBUG: 'false'
       }
-    );
+    });
 
-    const updateSettingsFunction = createLambdaFunction(
-      'UpdateSettingsFunction',
-      'settings/update-settings',
-      'Update application settings',
-      cdk.Duration.seconds(60),
-      512,
-      {
+    const updateSettingsFunction = new lambda.Function(this, 'UpdateSettingsFunction', {
+      runtime: lambda.Runtime.PYTHON_3_9,
+      handler: 'enhanced-update-settings.lambda_handler',
+      code: lambda.Code.fromAsset(path.join(__dirname, '../functions/settings')),
+      description: 'Update application settings with admin group validation',
+      timeout: cdk.Duration.seconds(60),
+      memorySize: 512,
+      environment: {
         SETTINGS_TABLE: props.settingsTable.tableName,
-        AWS_ACCOUNT_ID: this.account
+        AWS_ACCOUNT_ID: this.account,
+        DEBUG: 'false'
       }
-    );
+    });
 
     // Grant DynamoDB permissions for settings functions
     props.settingsTable.grantReadData(getSettingsFunction);
@@ -786,15 +834,15 @@ export class CfManagerBackendStack extends cdk.Stack {
     const settingsResource = this.api.root.addResource('settings');
     const settingResource = settingsResource.addResource('{key}');
 
-    // Configure API methods for settings
+    // Configure API methods for settings (admin-only with enhanced authorization)
     settingResource.addMethod('GET', new apigateway.LambdaIntegration(getSettingsFunction), {
-      authorizer,
-      authorizationType: apigateway.AuthorizationType.COGNITO
+      authorizer: enhancedAuthorizer,
+      authorizationType: apigateway.AuthorizationType.CUSTOM
     });
 
     settingResource.addMethod('PUT', new apigateway.LambdaIntegration(updateSettingsFunction), {
-      authorizer,
-      authorizationType: apigateway.AuthorizationType.COGNITO
+      authorizer: enhancedAuthorizer,
+      authorizationType: apigateway.AuthorizationType.CUSTOM
     });
 
     // Update distribution creation functions to include settings table access
