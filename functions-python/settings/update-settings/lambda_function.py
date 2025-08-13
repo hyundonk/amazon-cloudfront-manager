@@ -49,6 +49,22 @@ def validate_setting(setting_key: str, data: Dict[str, Any]) -> Tuple[bool, str]
         if len(bucket_name) < 3 or len(bucket_name) > 63:
             return False, 'bucketName must be between 3 and 63 characters long'
         
+        # Validate suffixPath if provided
+        if 'suffixPath' in data:
+            suffix_path = data['suffixPath']
+            if not isinstance(suffix_path, str) or len(suffix_path) < 1:
+                return False, 'suffixPath must be a non-empty string'
+            if not suffix_path.endswith('/'):
+                return False, 'suffixPath must end with a forward slash'
+        
+        # Validate partitioning settings if provided
+        if 'partitioning' in data:
+            partitioning = data['partitioning']
+            if not isinstance(partitioning, dict):
+                return False, 'partitioning must be an object'
+            if 'enabled' in partitioning and not isinstance(partitioning['enabled'], bool):
+                return False, 'partitioning.enabled must be a boolean'
+        
         output_format = data.get('outputFormat')
         if output_format and output_format not in ['json', 'parquet']:
             return False, 'outputFormat must be either "json" or "parquet"'

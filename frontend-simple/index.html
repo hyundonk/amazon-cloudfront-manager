@@ -443,6 +443,12 @@
                                     <small class="form-help">S3 bucket where access logs will be stored. Will be created automatically if it doesn't exist.</small>
                                 </div>
 
+                                <div class="form-group" id="access-logs-path-group" style="display: none;">
+                                    <label>Log Path Prefix</label>
+                                    <input type="text" id="access-logs-suffix-path" value="cloudfront-logs/" placeholder="cloudfront-logs/">
+                                    <small class="form-help">Directory path prefix for log files in S3 bucket. Must end with a forward slash.</small>
+                                </div>
+
                                 <div class="form-group" id="access-logs-format-group" style="display: none;">
                                     <label>Output Format</label>
                                     <select id="access-logs-format">
@@ -455,9 +461,9 @@
                                 <div class="form-group" id="access-logs-partitioning-group" style="display: none;">
                                     <div class="form-check">
                                         <input type="checkbox" id="access-logs-partitioning" checked>
-                                        <label for="access-logs-partitioning">Enable partitioning</label>
+                                        <label for="access-logs-partitioning">Enable Hive-compatible partitioning</label>
                                     </div>
-                                    <small class="form-help">Organizes logs by year/month/day/hour for better query performance and cost optimization.</small>
+                                    <small class="form-help">Automatically organizes logs by year/month/day/hour for better query performance and cost optimization.</small>
                                 </div>
 
                                 <div class="form-group" id="access-logs-compression-group" style="display: none;">

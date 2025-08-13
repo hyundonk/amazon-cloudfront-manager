@@ -3076,6 +3076,12 @@ function setupSettingsUI() {
         accessLogsEnabledCheckbox.addEventListener('change', toggleAccessLogsConfig);
     }
     
+    // Setup suffix path validation
+    const suffixPathInput = document.getElementById('access-logs-suffix-path');
+    if (suffixPathInput) {
+        suffixPathInput.addEventListener('blur', validateSuffixPath);
+    }
+    
     // Setup partitioning toggle
     const partitioningCheckbox = document.getElementById('access-logs-partitioning');
     if (partitioningCheckbox) {
@@ -3168,6 +3174,12 @@ function populateAccessLogsForm(settings) {
         bucketInput.value = settings.bucketName || '';
     }
     
+    // Suffix path
+    const suffixPathInput = document.getElementById('access-logs-suffix-path');
+    if (suffixPathInput) {
+        suffixPathInput.value = settings.suffixPath || 'cloudfront-logs/';
+    }
+    
     // Output format
     const formatSelect = document.getElementById('access-logs-format');
     if (formatSelect) {
@@ -3194,6 +3206,7 @@ function toggleAccessLogsConfig() {
     const enabledCheckbox = document.getElementById('access-logs-enabled');
     const configGroups = [
         'access-logs-config',
+        'access-logs-path-group',
         'access-logs-format-group',
         'access-logs-partitioning-group',
         'access-logs-compression-group',
@@ -3217,12 +3230,34 @@ function toggleAccessLogsConfig() {
 }
 
 /**
+ * Validate suffix path format
+ */
+function validateSuffixPath() {
+    const suffixPathInput = document.getElementById('access-logs-suffix-path');
+    if (!suffixPathInput) return;
+    
+    let value = suffixPathInput.value.trim();
+    
+    // Auto-add trailing slash if missing
+    if (value && !value.endsWith('/')) {
+        value += '/';
+        suffixPathInput.value = value;
+    }
+    
+    // Validate format
+    if (value && !/^[a-zA-Z0-9\-_\/]+\/$/.test(value)) {
+        suffixPathInput.setCustomValidity('Path must contain only letters, numbers, hyphens, underscores, and forward slashes, and end with /');
+    } else {
+        suffixPathInput.setCustomValidity('');
+    }
+}
+
+/**
  * Update partitioning configuration
  */
 function updatePartitioningConfig() {
     const partitioningCheckbox = document.getElementById('access-logs-partitioning');
-    console.log('Partitioning enabled:', partitioningCheckbox?.checked);
-    // Additional partitioning configuration could be added here
+    console.log('Hive-compatible partitioning enabled:', partitioningCheckbox?.checked);
 }
 
 /**
@@ -3282,6 +3317,7 @@ async function saveAccessLogsSettings() {
 function collectAccessLogsFormData() {
     const enabledCheckbox = document.getElementById('access-logs-enabled');
     const bucketInput = document.getElementById('access-logs-bucket');
+    const suffixPathInput = document.getElementById('access-logs-suffix-path');
     const formatSelect = document.getElementById('access-logs-format');
     const partitioningCheckbox = document.getElementById('access-logs-partitioning');
     const compressionSelect = document.getElementById('access-logs-compression');
@@ -3289,10 +3325,10 @@ function collectAccessLogsFormData() {
     return {
         enabled: enabledCheckbox?.checked || false,
         bucketName: bucketInput?.value?.trim() || '',
+        suffixPath: suffixPathInput?.value?.trim() || 'cloudfront-logs/',
         outputFormat: formatSelect?.value || 'json',
         partitioning: {
-            enabled: partitioningCheckbox?.checked !== false,
-            pattern: 'year={year}/month={month}/day={day}/hour={hour}'
+            enabled: partitioningCheckbox?.checked !== false
         },
         compression: compressionSelect?.value || 'gzip'
     };
