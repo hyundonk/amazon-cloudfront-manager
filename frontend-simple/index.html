@@ -757,6 +757,66 @@
         </div>
     </div>
 
+    <!-- Modal for viewing origin details -->
+    <div class="modal" id="origin-detail-modal">
+        <div class="modal-content modal-large">
+            <div class="modal-header">
+                <h2>Origin Details</h2>
+                <button class="close-btn">&times;</button>
+            </div>
+            <div class="modal-body modal-scrollable">
+                <div class="detail-container">
+                    <div class="detail-section">
+                        <h3>Basic Information</h3>
+                        <div class="detail-grid">
+                            <div class="detail-item">
+                                <span class="detail-label">Origin ID:</span>
+                                <span class="detail-value" id="detail-origin-id">-</span>
+                            </div>
+                            <div class="detail-item">
+                                <span class="detail-label">Name:</span>
+                                <span class="detail-value" id="detail-origin-name">-</span>
+                            </div>
+                            <div class="detail-item">
+                                <span class="detail-label">Bucket Name:</span>
+                                <span class="detail-value" id="detail-bucket-name">-</span>
+                            </div>
+                            <div class="detail-item">
+                                <span class="detail-label">Region:</span>
+                                <span class="detail-value" id="detail-region">-</span>
+                            </div>
+                            <div class="detail-item">
+                                <span class="detail-label">OAC ID:</span>
+                                <span class="detail-value" id="detail-oac-id">-</span>
+                            </div>
+                            <div class="detail-item">
+                                <span class="detail-label">Created:</span>
+                                <span class="detail-value" id="detail-created-at">-</span>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="detail-section">
+                        <h3>Associated Distributions</h3>
+                        <div id="detail-distributions" class="distribution-list">
+                            <p class="no-data">No associated distributions</p>
+                        </div>
+                    </div>
+                    
+                    <div class="detail-section">
+                        <h3>Raw JSON Data</h3>
+                        <div class="json-container">
+                            <pre id="detail-json-content" class="json-content"></pre>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-secondary" id="close-origin-detail-btn">Close</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Modal for creating template -->
     <div class="modal" id="create-template-modal">
         <div class="modal-content">

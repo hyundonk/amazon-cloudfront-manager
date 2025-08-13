@@ -1088,6 +1088,129 @@ select option[style*="color: red"] {
     gap: 10px;
 }
 
+/* Detail modal specific styles */
+.modal-large {
+    width: 900px;
+    max-width: 95%;
+}
+
+.modal-scrollable {
+    max-height: calc(80vh - 120px);
+    overflow-y: auto;
+}
+
+.detail-container {
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+}
+
+.detail-section {
+    background: #f8f9fa;
+    border-radius: 8px;
+    padding: 20px;
+    border: 1px solid #e1e5e9;
+}
+
+.detail-section h3 {
+    margin: 0 0 16px 0;
+    color: #2c3e50;
+    font-size: 1.2rem;
+    font-weight: 600;
+    border-bottom: 2px solid #3498db;
+    padding-bottom: 8px;
+}
+
+.detail-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 16px;
+}
+
+.detail-item {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.detail-label {
+    font-weight: 600;
+    color: #555;
+    font-size: 0.9rem;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.detail-value {
+    color: #2c3e50;
+    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+    background: #fff;
+    padding: 8px 12px;
+    border-radius: 4px;
+    border: 1px solid #ddd;
+    word-break: break-all;
+}
+
+.distribution-list {
+    background: #fff;
+    border-radius: 6px;
+    padding: 16px;
+    border: 1px solid #ddd;
+}
+
+.distribution-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 0;
+    border-bottom: 1px solid #eee;
+}
+
+.distribution-item:last-child {
+    border-bottom: none;
+}
+
+.distribution-name {
+    font-weight: 600;
+    color: #2c3e50;
+}
+
+.distribution-id {
+    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+    color: #666;
+    font-size: 0.9rem;
+}
+
+.json-container {
+    background: #fff;
+    border-radius: 6px;
+    border: 1px solid #ddd;
+    overflow: hidden;
+}
+
+.json-content {
+    background: #f8f9fa;
+    color: #2c3e50;
+    padding: 20px;
+    margin: 0;
+    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+    font-size: 0.9rem;
+    line-height: 1.5;
+    overflow-x: auto;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    max-height: 400px;
+    overflow-y: auto;
+}
+
+.no-data {
+    color: #666;
+    font-style: italic;
+    text-align: center;
+    margin: 0;
+    padding: 20px;
+}
+
 /* Default avatar */
 img[src="img/default-avatar.png"] {
     background-color: #ddd;

@@ -139,6 +139,43 @@ function setupPermissionAwareEventListeners() {
             }
         });
     }
+    
+    // Setup modal close event listeners
+    setupModalEventListeners();
+}
+
+/**
+ * Setup modal event listeners
+ */
+function setupModalEventListeners() {
+    // Origin detail modal close events
+    const originDetailModal = document.getElementById('origin-detail-modal');
+    const closeOriginDetailBtn = document.getElementById('close-origin-detail-btn');
+    
+    if (closeOriginDetailBtn) {
+        closeOriginDetailBtn.addEventListener('click', function() {
+            originDetailModal.classList.remove('active');
+        });
+    }
+    
+    // Close modal when clicking outside
+    if (originDetailModal) {
+        originDetailModal.addEventListener('click', function(e) {
+            if (e.target === this) {
+                this.classList.remove('active');
+            }
+        });
+    }
+    
+    // Close modal with Escape key
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') {
+            const activeModal = document.querySelector('.modal.active');
+            if (activeModal) {
+                activeModal.classList.remove('active');
+            }
+        }
+    });
 }
 
 /**
@@ -1330,10 +1367,8 @@ function addOriginActionListeners() {
 function viewOrigin(id) {
     apiCall(`/origins/${id}`)
         .then(response => {
-            if (response.success) {
-                // In a real application, you would show a detailed view
-                // For now, we'll just show an alert with the data
-                alert(`Origin details for ${id}:\n${JSON.stringify(response.data.origin, null, 2)}`);
+            if (response.success && response.data && response.data.origin) {
+                showOriginDetailModal(response.data.origin);
             } else {
                 alert(`Failed to load origin details: ${response.error}`);
             }
@@ -1342,6 +1377,41 @@ function viewOrigin(id) {
             console.error('Error viewing origin:', error);
             alert('Failed to load origin details');
         });
+}
+
+// Show origin detail modal
+function showOriginDetailModal(origin) {
+    // Populate basic information
+    document.getElementById('detail-origin-id').textContent = origin.originId || '-';
+    document.getElementById('detail-origin-name').textContent = origin.name || '-';
+    document.getElementById('detail-bucket-name').textContent = origin.bucketName || '-';
+    document.getElementById('detail-region').textContent = origin.region || '-';
+    document.getElementById('detail-oac-id').textContent = origin.oacId || '-';
+    
+    // Format and display creation date
+    const createdAt = origin.createdAt ? new Date(origin.createdAt).toLocaleString() : '-';
+    document.getElementById('detail-created-at').textContent = createdAt;
+    
+    // Display associated distributions
+    const distributionsContainer = document.getElementById('detail-distributions');
+    if (origin.associatedDistributions && origin.associatedDistributions.length > 0) {
+        distributionsContainer.innerHTML = origin.associatedDistributions.map(dist => `
+            <div class="distribution-item">
+                <div>
+                    <div class="distribution-name">${dist.name || 'Unnamed Distribution'}</div>
+                    <div class="distribution-id">${dist.distributionId}</div>
+                </div>
+            </div>
+        `).join('');
+    } else {
+        distributionsContainer.innerHTML = '<p class="no-data">No associated distributions</p>';
+    }
+    
+    // Display raw JSON data
+    document.getElementById('detail-json-content').textContent = JSON.stringify(origin, null, 2);
+    
+    // Show modal
+    document.getElementById('origin-detail-modal').classList.add('active');
 }
 
 // Edit origin
