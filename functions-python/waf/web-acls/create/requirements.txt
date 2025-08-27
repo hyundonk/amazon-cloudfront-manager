@@ -1,0 +1,1 @@
+# No additional requirements needed - using boto3 from Lambda runtime
